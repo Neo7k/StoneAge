@@ -18,6 +18,33 @@ struct Image
 	b4 pix[size.y][size.x];
 };
 
+struct Quad
+{
+	v4 GetMin() const
+	{
+		v4 m = verts[0];
+		for (int i = 1; i < 4; ++i)
+		{
+			m.x = verts[i].x < m.x ? verts[i].x : m.x;
+			m.y = verts[i].y < m.y ? verts[i].y : m.y;
+		}
+		return m;
+	}
+
+	v4 GetMax() const
+	{
+		v4 m = verts[0];
+		for (int i = 1; i < 4; ++i)
+		{
+			m.x = verts[i].x > m.x ? verts[i].x : m.x;
+			m.y = verts[i].y > m.y ? verts[i].y : m.y;
+		}
+		return m;
+	}
+
+	v4 verts[4];
+};
+
 int main()
 {
 	Image<{32, 32}> frame;
@@ -30,10 +57,14 @@ int main()
 		{
 			frame.Clear();
 
-			i2 top_left{8, 8};
-			for (int x = 0; x < 16; ++x)
-				for (int y = 0; y < 16; ++y)
-					frame.Set(top_left + i2{x, y}, {255, 0, 0, 0});
+			Quad q{ v4{0.25f, 0.25f}, v4{0.75f, 0.25f},
+							v4{0.25f, 0.75f}, v4{0.75f, 0.75f}};
+
+			i2 top_left = Floor_i2(q.GetMin() * frame.GetSize());
+			i2 bottom_right = Ceil_i2(q.GetMax() * frame.GetSize());
+			for (int y = top_left.y; y < bottom_right.y; ++y)
+				for (int x = top_left.x; x < bottom_right.x; ++x)
+					frame.Set({x, y}, {255, 0, 0, 0});
 		};
 	
 	window.Run(frame_fn);
