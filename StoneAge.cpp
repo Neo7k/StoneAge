@@ -13,15 +13,16 @@ struct Image
 {
 	constexpr i2 GetSize() const { return size; }
 	void Clear() { memset(pix, 0, sizeof(pix)); }
+	void Set(i2 coords, b4 color) { pix[coords.y][coords.x] = color; }
 
 	b4 pix[size.y][size.x];
 };
 
 int main()
 {
-	Image<{8, 8}> frame;
+	Image<{32, 32}> frame;
 
-	GameWindow window(frame, 64);
+	GameWindow window(frame, 32);
 
 	auto&& frame_fn =
 		[&]
@@ -29,13 +30,10 @@ int main()
 		{
 			frame.Clear();
 
-			frame.pix[1][1] = {255, 0, 0, 0};
-			frame.pix[2][2] = {255, 127, 0, 0};
-			frame.pix[3][3] = {255, 255, 0, 0};
-			frame.pix[4][4] = {0, 255, 0, 0};
-			frame.pix[5][5] = {0, 0, 255, 0};
-			frame.pix[6][6] = {127, 0, 255, 0};
-
+			i2 top_left{8, 8};
+			for (int x = 0; x < 16; ++x)
+				for (int y = 0; y < 16; ++y)
+					frame.Set(top_left + i2{x, y}, {255, 0, 0, 0});
 		};
 	
 	window.Run(frame_fn);
