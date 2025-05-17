@@ -2,6 +2,8 @@
 
 #include <math.h>
 
+#include <algorithm>
+
 #include "Common.h"
 
 struct i2
@@ -34,16 +36,6 @@ struct v4
 	v4 operator * (v4 other) { return v4{x * other.x, y * other.y, z * other.z, w * other.w}; }
 };
 
-i2 Floor_i2(v4 vec)
-{
-	return i2{(int)vec.x, (int)vec.y};
-}
-
-i2 Ceil_i2(v4 vec)
-{
-	return i2{(int)ceilf(vec.x), (int)ceilf(vec.y)};
-}
-
 struct b4
 {
 	uchar x;
@@ -54,3 +46,17 @@ struct b4
 	void operator += (b4 other) { x += other.x; y += other.y; z += other.z; w += other.w; }
 };
 
+i2 Floor_i2(v4 vec)
+{
+	return i2{(int)vec.x, (int)vec.y};
+}
+
+i2 Ceil_i2(v4 vec)
+{
+	return i2{(int)ceilf(vec.x), (int)ceilf(vec.y)};
+}
+
+i2 Clamp(i2 v, i2 min, i2 max)
+{
+	return {std::clamp(v.x, min.x, max.x), std::clamp(v.y, min.y, max.y)};
+}

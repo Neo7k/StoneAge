@@ -45,6 +45,13 @@ struct Quad
 		return m;
 	}
 
+	float GetEdgeValue(v4 p, int edge) const
+	{
+		int n = edge;
+		int n_1 = n + 1 <= 3 ? n + 1 : 0;
+		return (verts[n_1].y - verts[n].y) * (p.x - verts[n].x) - (verts[n_1].x - verts[n].x) * (p.y - verts[n].y);
+	}
+
 	v4 verts[4];
 };
 
@@ -62,44 +69,22 @@ int main()
 			Quad q{ v4{0.45f, 0.25f}, v4{0.25f, 0.75f},
 							v4{0.75f, 0.55f}, v4{0.95f, 0.05f}};
 
-			static int x = 0;
-			static int y = 0;
-			static int pass = 0;
-			++x;
-			if (x >= frame.GetSize().x)
-			{
-				++y;
-				x = 0;
-			}
-
-			if (y >= frame.GetSize().y)
-			{
-				x = 0;
-				y = 0;
-				++pass;
-			}
-
-			if (pass > 3)
-				return;
-
+			i2 top_left = Floor_i2(q.GetMin() * frame.GetSize());
+			i2 bottom_right = Ceil_i2(q.GetMax() * frame.GetSize());
+			top_left = Clamp(top_left, {0, 0}, frame.GetSize());
+			bottom_right = Clamp(bottom_right, {0, 0}, frame.GetSize());
+			v4 frame_size_inv{1.0f / frame.GetSize().x, 1.0f / frame.GetSize().y};
+			for (int y = top_left.y; y < bottom_right.y; ++y)
+				for (int x = top_left.x; x < bottom_right.x; ++x)
 				{
-					v4 p = v4{x + 0.5f, y + 0.5f} * v4{1.0f / frame.GetSize().x, 1.0f / frame.GetSize().y};
-					float signs[] =
+					v4 p = v4{x + 0.5f, y + 0.5f} * frame_size_inv; 
+					if (q.GetEdgeValue(p, 0) > 0 &&
+							q.GetEdgeValue(p, 1) > 0 &&
+							q.GetEdgeValue(p, 2) > 0 &&
+							q.GetEdgeValue(p, 3) > 0)
 					{
-						(q.verts[1].x - q.verts[0].x) * (p.y - q.verts[0].y) - (q.verts[1].y - q.verts[0].y) * (p.x - q.verts[0].x),
-						(q.verts[2].x - q.verts[1].x) * (p.y - q.verts[1].y) - (q.verts[2].y - q.verts[1].y) * (p.x - q.verts[1].x),
-						(q.verts[3].x - q.verts[2].x) * (p.y - q.verts[2].y) - (q.verts[3].y - q.verts[2].y) * (p.x - q.verts[2].x),
-						(q.verts[0].x - q.verts[3].x) * (p.y - q.verts[3].y) - (q.verts[0].y - q.verts[3].y) * (p.x - q.verts[3].x),
-					};
-
-					if (pass == 0)
-						frame.Add({x, y}, {signs[0] < 0 ? (uchar)127u : (uchar)64u, 0, 0, 0});
-					if (pass == 1)
-						frame.Add({x, y}, {0, signs[1] < 0 ? (uchar)127u : (uchar)64u, 0, 0});
-					if (pass == 2)
-						frame.Add({x, y}, {0, 0, signs[2] < 0 ? (uchar)127u : (uchar)64u, 0});
-					if (pass == 3)
-						frame.Add({x, y}, signs[3] < 0 ? b4{127, 127, 127, 0} : b4{64, 64, 64, 0}); 
+						frame.Set({x, y}, {255, 0, 0, 0}); 
+					}
 				}
 		};
 	
