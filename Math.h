@@ -82,6 +82,13 @@ struct Mtx
 		lines[2] = v4::Zero();
 		lines[3] = v4{0.0f, 0.0f};
 	}
+	Mtx(v4 l1, v4 l2, v4 l3)
+	{
+		lines[0] = l1;
+		lines[1] = l2;
+		lines[2] = l3;
+		lines[3] = v4{0.0f, 0.0f};
+	}
 
 	v4 operator * (v4 v) const
 	{

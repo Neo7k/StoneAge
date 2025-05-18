@@ -80,8 +80,9 @@ int main()
 
 			static float alpha = 0.0f;
 			alpha += 0.02f;
-			Mtx rotation{v4{cos(alpha), -sin(alpha), 0.0f, 0.0f},
-									v4{sin(alpha), cos(alpha), 0.0f, 0.0f}};
+			Mtx rotation{	v4{cos(alpha), 	0.0f, sin(alpha), 0.0f},
+										v4{0.0f, 				1.0f, 0.0f, 			0.0f},
+										v4{-sin(alpha), 0.0f, cos(alpha), 0.0f}};
 			q = rotation * q;
 
 			Mtx to_screen_ctr{v4{0.5f, 0.0f, 0.0f, 0.5f},
@@ -97,12 +98,17 @@ int main()
 				for (int x = top_left.x; x < bottom_right.x; ++x)
 				{
 					v4 p = v4{x + 0.5f, y + 0.5f} * frame_size_inv; 
-					if (q.GetEdgeValue(p, 0) > 0 &&
-							q.GetEdgeValue(p, 1) > 0 &&
-							q.GetEdgeValue(p, 2) > 0 &&
-							q.GetEdgeValue(p, 3) > 0)
+					float e[4] {q.GetEdgeValue(p, 0),
+											q.GetEdgeValue(p, 1),
+											q.GetEdgeValue(p, 2),
+											q.GetEdgeValue(p, 3)};
+					if (e[0] > 0 && e[1] > 0 && e[2] > 0 && e[3] > 0)
 					{
 						frame.Set({x, y}, {255, 0, 0, 0}); 
+					}
+					else if (e[0] < 0 && e[1] < 0 && e[2] < 0 && e[3] < 0)
+					{
+						frame.Set({x, y}, {0, 0, 255, 0});
 					}
 				}
 		};
