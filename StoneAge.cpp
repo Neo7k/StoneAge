@@ -84,6 +84,10 @@ int main()
 									v4{sin(alpha), cos(alpha), 0.0f, 0.0f}};
 			q = rotation * q;
 
+			Mtx to_screen_ctr{v4{0.5f, 0.0f, 0.0f, 0.5f},
+												v4{0.0f, 0.5f, 0.0f, 0.5f}};
+			q = to_screen_ctr * q;
+
 			i2 top_left = Floor_i2(q.GetMin() * frame.GetSize());
 			i2 bottom_right = Ceil_i2(q.GetMax() * frame.GetSize());
 			top_left = Clamp(top_left, {0, 0}, frame.GetSize());
