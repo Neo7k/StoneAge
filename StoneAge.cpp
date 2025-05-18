@@ -52,6 +52,14 @@ struct Quad
 		return (verts[n_1].y - verts[n].y) * (p.x - verts[n].x) - (verts[n_1].x - verts[n].x) * (p.y - verts[n].y);
 	}
 
+	friend Quad operator * (Mtx m, const Quad& q)
+	{
+		return Quad{m * q.verts[0],
+								m * q.verts[1],
+								m * q.verts[2],
+								m * q.verts[3]};
+	}
+
 	v4 verts[4];
 };
 
@@ -66,8 +74,15 @@ int main()
 		[&]
 		()
 		{
+			frame.Clear();
 			Quad q{ v4{0.45f, 0.25f}, v4{0.25f, 0.75f},
 							v4{0.75f, 0.55f}, v4{0.95f, 0.05f}};
+
+			static float alpha = 0.0f;
+			alpha += 0.02f;
+			Mtx rotation{v4{cos(alpha), -sin(alpha), 0.0f, 0.0f},
+									v4{sin(alpha), cos(alpha), 0.0f, 0.0f}};
+			q = rotation * q;
 
 			i2 top_left = Floor_i2(q.GetMin() * frame.GetSize());
 			i2 bottom_right = Ceil_i2(q.GetMax() * frame.GetSize());
