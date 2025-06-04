@@ -80,29 +80,7 @@ int main()
 
 	std::vector<Quad> quads;
 
-	for (int i = 0; i < 4; ++i)
-	{
-		quads.emplace_back(Quad
-		{ 
-			v4{-0.75f + i * 0.5f, 0.5f, 1.0f},
-			v4{-0.75f + i * 0.5f, -0.5f, 1.0f},
-			v4{-0.75f + i * 0.5f, -0.5f, 10.0f},
-			v4{-0.75f + i * 0.5f, 0.5f, 10.0f},
-			v4{0.0f, 0.0f, 1.0f}
-		});
-	}
-
-	for (int i = 0; i < 2; ++i)
-	{
-		quads.emplace_back(Quad
-		{
-			v4{-0.75f + i, 0.5f, 1.0f},
-			v4{-0.75f + i, -0.5f, 1.0f},
-			v4{-0.25f + i, -0.5f, 1.0f},
-			v4{-0.25f + i, 0.5f, 1.0f},
-			v4{1.0f, 0.0f, 0.0f}
-		});
-	}
+	
 
 	auto&& frame_fn =
 		[&]
@@ -111,6 +89,52 @@ int main()
 			frame.Clear();
 			static float t = 0.0f;
 			t += 0.005;
+			quads.clear();
+			for (int i = 0; i < 4; ++i)
+			for (int j = 0; j < 2; ++j)
+			{
+				Mtx mtx
+				{
+					v4{sinf(t), 0.0f, cosf(t), -0.5f + j},
+					v4{0.0f, 1.0f, 0.0f, 0.0f},
+					v4{-cosf(t), 0.0f, sinf(t), 4.0f - (float)i},
+				};
+				quads.emplace_back(mtx*Quad
+				{ 
+					v4{-0.15f, 0.5f, 0.15f},
+					v4{-0.15f, -0.5f, 0.15f},
+					v4{-0.15f, -0.5f, -0.15f},
+					v4{-0.15f, 0.5f, -0.15f},
+					v4{0.0f, 0.0f, 1.0f}
+				});
+				quads.emplace_back(mtx*Quad
+				{ 
+					v4{0.15f, 0.5f, -0.15f},
+					v4{0.15f, -0.5f, -0.15f},
+					v4{0.15f, -0.5f, 0.15f},
+					v4{0.15f, 0.5f, 0.15f},
+					v4{0.0f, 0.0f, 1.0f}
+				});
+				quads.emplace_back(mtx*Quad
+				{ 
+					v4{-0.15f, 0.5f, -0.15f},
+					v4{-0.15f, -0.5f, -0.15f},
+					v4{0.15f, -0.5f, -0.15f},
+					v4{0.15f, 0.5f, -0.15f},
+					v4{1.0f, 0.0f, 0.0f}
+				});
+				quads.emplace_back(mtx*Quad
+				{ 
+					v4{0.15f, 0.5f, 0.15f},
+					v4{0.15f, -0.5f, 0.15f},
+					v4{-0.15f, -0.5f, 0.15f},
+					v4{-0.15f, 0.5f, 0.15f},
+					v4{1.0f, 0.0f, 0.0f}
+				});
+			}
+			static float tt = 0.0f;
+			if (t > 5.0f)
+				tt += 0.005f;
 			for (Quad q : quads)
 			{
 				Mtx projection 
@@ -118,7 +142,7 @@ int main()
 					v4{1.0f, 0.0f, 0.0f, 0.0f},
 					v4{0.0f, -1.0f, 0.0f, 0.0f},
 					v4{0.0f, 0.0f, 1.0f, 0.0f},
-					v4{0.0f, 0.0f, std::clamp(t, 0.0f, 1.0f), std::clamp(1.0f - t, 0.0f, 1.0f)}
+					v4{0.0f, 0.0f, std::clamp(tt, 0.0f, 1.0f), std::clamp(1.0f - tt, 0.0f, 1.0f)}
 				};
 				q = projection * q;
 				for (v4& vert : q.verts)
@@ -155,7 +179,6 @@ int main()
 							}
 							else if (e[0] < 0 && e[1] < 0 && e[2] < 0 && e[3] < 0)
 							{
-								pixel_color = v4{q.color.x, q.color.y, q.color.z, pixel_color.w + 0.25f};
 							}
 						}
 						b4 fp = frame.pix[y][x];
