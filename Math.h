@@ -128,5 +128,35 @@ struct Mtx
 							lines[3].Dot(v)};
 	}
 
+	Mtx operator * (const Mtx& o) const
+	{
+		return
+		{
+			{
+				lines[0].Dot({o.lines[0].x, o.lines[1].x, o.lines[2].x, o.lines[3].x}),
+				lines[0].Dot({o.lines[0].y, o.lines[1].y, o.lines[2].y, o.lines[3].y}),
+				lines[0].Dot({o.lines[0].z, o.lines[1].z, o.lines[2].z, o.lines[3].z}),
+				lines[0].Dot({o.lines[0].w, o.lines[1].w, o.lines[2].w, o.lines[3].w})
+			},
+			{
+				lines[1].Dot({o.lines[0].x, o.lines[1].x, o.lines[2].x, o.lines[3].x}),
+				lines[1].Dot({o.lines[0].y, o.lines[1].y, o.lines[2].y, o.lines[3].y}),
+				lines[1].Dot({o.lines[0].z, o.lines[1].z, o.lines[2].z, o.lines[3].z}),
+				lines[1].Dot({o.lines[0].w, o.lines[1].w, o.lines[2].w, o.lines[3].w})
+			},
+			{
+				lines[2].Dot({o.lines[0].x, o.lines[1].x, o.lines[2].x, o.lines[3].x}),
+				lines[2].Dot({o.lines[0].y, o.lines[1].y, o.lines[2].y, o.lines[3].y}),
+				lines[2].Dot({o.lines[0].z, o.lines[1].z, o.lines[2].z, o.lines[3].z}),
+				lines[2].Dot({o.lines[0].w, o.lines[1].w, o.lines[2].w, o.lines[3].w})
+			},
+			{
+				lines[3].Dot({o.lines[0].x, o.lines[1].x, o.lines[2].x, o.lines[3].x}),
+				lines[3].Dot({o.lines[0].y, o.lines[1].y, o.lines[2].y, o.lines[3].y}),
+				lines[3].Dot({o.lines[0].z, o.lines[1].z, o.lines[2].z, o.lines[3].z}),
+				lines[3].Dot({o.lines[0].w, o.lines[1].w, o.lines[2].w, o.lines[3].w})
+			}
+		};
+	}
 	v4 lines[4];
 };

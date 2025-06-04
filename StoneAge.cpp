@@ -135,16 +135,24 @@ int main()
 			static float tt = 0.0f;
 			if (t > 5.0f)
 				tt += 0.005f;
+			Mtx view
+			{
+				{1.0f, 0.0f, 0.0f, 0.0f},
+				{0.0f, 1.0f, 0.0f, 0.0f},
+				{0.0f, 0.0f, 1.0f, -tt},
+				{0.0f, 0.0f, 0.0f, 0.0f}
+			};
+			Mtx projection 
+			{
+				{1.0f, 0.0f, 0.0f, 0.0f},
+				{0.0f, -1.0f, 0.0f, 0.0f},
+				{0.0f, 0.0f, 1.0f, 0.0f},
+				{0.0f, 0.0f, 1.0f, 0.0f} 
+			};
+			Mtx view_proj = projection * view; 
 			for (Quad q : quads)
 			{
-				Mtx projection 
-				{
-					v4{1.0f, 0.0f, 0.0f, 0.0f},
-					v4{0.0f, -1.0f, 0.0f, 0.0f},
-					v4{0.0f, 0.0f, 1.0f, 0.0f},
-					v4{0.0f, 0.0f, std::clamp(tt, 0.0f, 1.0f), std::clamp(1.0f - tt, 0.0f, 1.0f)}
-				};
-				q = projection * q;
+				q = view_proj * q;
 				for (v4& vert : q.verts)
 					if (vert.w != 0.0f)
 						vert = vert * (1.0f / vert.w); 
