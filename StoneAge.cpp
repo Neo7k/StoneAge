@@ -132,14 +132,11 @@ int main()
 					v4{1.0f, 0.0f, 0.0f}
 				});
 			}
-			static float tt = 0.0f;
-			if (t > 5.0f)
-				tt += 0.005f;
 			Mtx view
 			{
 				{1.0f, 0.0f, 0.0f, 0.0f},
 				{0.0f, 1.0f, 0.0f, 0.0f},
-				{0.0f, 0.0f, 1.0f, -tt},
+				{0.0f, 0.0f, 1.0f, -t},
 				{0.0f, 0.0f, 0.0f, 0.0f}
 			};
 			Mtx projection 
@@ -153,6 +150,13 @@ int main()
 			for (Quad q : quads)
 			{
 				q = view_proj * q;
+				if (q.verts[0].z <= 0.0f &&
+						q.verts[1].z <= 0.0f &&
+						q.verts[2].z <= 0.0f &&
+						q.verts[3].z <= 0.0f)
+				{
+					continue;
+				}
 				for (v4& vert : q.verts)
 					if (vert.w != 0.0f)
 						vert = vert * (1.0f / vert.w); 
