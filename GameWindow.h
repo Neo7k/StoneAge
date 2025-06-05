@@ -23,7 +23,7 @@ struct GameWindow
 		XSetWindowAttributes attributes = 
 		{
 			.background_pixel = BlackPixel(xdisplay, screen),
-			.event_mask = ExposureMask | KeyPressMask
+			.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask
 		};
 
 		window_size = in_frame.GetSize() * scale_factor;
@@ -58,8 +58,8 @@ struct GameWindow
 		XCloseDisplay(xdisplay);
 	}
 
-	template<typename TFrameFn>
-	void Run(TFrameFn&& frame_fn)
+	template<typename TFrameFn, typename TKeyFn>
+	void Run(TFrameFn&& frame_fn, TKeyFn&& key_fn)
 	{
 		while (!done)
 		{
@@ -70,9 +70,12 @@ struct GameWindow
 				switch (event.type)
 				{
 					case KeyPress:
+						key_fn(event.xkey.keycode, true);
 						if (event.xkey.keycode == Key_Escape)
 							done = true;
 						break;
+					case KeyRelease:
+						key_fn(event.xkey.keycode, false);
 					case ClientMessage:
 						if (event.xclient.data.l[0] == wm_delete_window)
 							done = true;

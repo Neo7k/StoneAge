@@ -10,6 +10,14 @@
 #include "Math.h"
 #include "GameWindow.h"
 
+constexpr int Key_W = 25;
+constexpr int Key_A = 38;
+constexpr int Key_S = 39;
+constexpr int Key_D = 40;
+constexpr int Key_Left = 113;
+constexpr int Key_Right = 114;
+
+
 template<i2 size>
 struct Image
 {
@@ -71,6 +79,27 @@ struct Quad
 	v4 color{1.0f, 0.0f};
 };
 
+struct Input 
+{
+	Input() { memset(keys, 0, sizeof(keys)); memset(keys_time, 0, sizeof(keys_time)); }
+	void Update(float dt) 
+	{
+		for (int i = 0; i < 256; ++i)
+			if (keys[i])
+				keys_time[i] += dt;
+	}
+	bool keys[256];
+	float keys_time[256];
+};
+
+struct Camera
+{
+	v4 GetForward() const { return {-sinf(angle), 0.0f, cosf(angle), 0.0f}; }
+	v4 GetRight() const { return {cosf(angle), 0.0f, sinf(angle), 0.0f}; }
+	v4 pos = v4::Zero();
+	float angle = 0.0f;
+};
+
 int main()
 {
 	Image<{128, 128}> frame;
@@ -78,17 +107,31 @@ int main()
 
 	GameWindow window(frame, 8);
 
-	std::vector<Quad> quads;
+	Input input;
+	auto&& key_fn = [&input](int key, bool is_pressed)
+	{
+		input.keys[key] = is_pressed;
+		if (!is_pressed)
+			input.keys_time[key] = 0.0f;
+	};
 
-	
+	auto frame_start = std::chrono::steady_clock::now();
+
+	Camera camera;
+	std::vector<Quad> quads;
 
 	auto&& frame_fn =
 		[&]
 		()
 		{
-			frame.Clear();
+			auto now = std::chrono::steady_clock::now();
+			std::chrono::duration<float> dt_dur = now - frame_start;
+			frame_start = now;
+			float dt = dt_dur.count();
+
+			input.Update(dt);
 			static float t = 0.0f;
-			t += 0.005;
+			t += dt;
 			quads.clear();
 			for (int i = 0; i < 4; ++i)
 			for (int j = 0; j < 2; ++j)
@@ -132,12 +175,22 @@ int main()
 					v4{1.0f, 0.0f, 0.0f}
 				});
 			}
+
+			const float camera_speed = 1.0f;
+			camera.pos += camera.GetForward() * ((float)input.keys[Key_W] * camera_speed * dt);
+			camera.pos += camera.GetForward() * ((float)input.keys[Key_S] * camera_speed * dt * -1.0f);
+			camera.pos += camera.GetRight() * ((float)input.keys[Key_D] * camera_speed * dt);
+			camera.pos += camera.GetRight() * ((float)input.keys[Key_A] * camera_speed * dt * -1.0f);
+			const float camera_rotation_speed = 1.75f;
+			camera.angle += camera_rotation_speed * dt * (float)input.keys[Key_Left];
+			camera.angle -= camera_rotation_speed * dt * (float)input.keys[Key_Right];
+
 			Mtx view
 			{
-				{1.0f, 0.0f, 0.0f, 0.0f},
-				{0.0f, 1.0f, 0.0f, 0.0f},
-				{0.0f, 0.0f, 1.0f, -t},
-				{0.0f, 0.0f, 0.0f, 0.0f}
+				{cosf(camera.angle), 0.0f, sinf(camera.angle), -camera.pos.x * cos(camera.angle) - camera.pos.z * sin(camera.angle)},
+				{0.0f, 1.0f, 0.0f, -camera.pos.y},
+				{-sinf(camera.angle), 0.0f, cosf(camera.angle), camera.pos.x * sin(camera.angle) - camera.pos.z * cos(camera.angle)},
+				{0.0f, 0.0f, 0.0f, 1.0f}
 			};
 			Mtx projection 
 			{
@@ -147,6 +200,7 @@ int main()
 				{0.0f, 0.0f, 1.0f, 0.0f} 
 			};
 			Mtx view_proj = projection * view; 
+			frame.Clear();
 			for (Quad q : quads)
 			{
 				q = view_proj * q;
@@ -201,7 +255,7 @@ int main()
 			}
 		};
 	
-	window.Run(frame_fn);
+	window.Run(frame_fn, key_fn);
 	
 	return 0;
 }
