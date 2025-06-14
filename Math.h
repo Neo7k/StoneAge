@@ -39,6 +39,7 @@ struct v4
 	v4 operator * (float other) const { return v4{x * other, y * other, z * other, w * other}; }
 	v4 operator += (v4 other) { x += other.x; y += other.y; z += other.z; w += other.w; return *this; }
 	v4 operator + (v4 other) const { return v4{x + other.x, y + other.y, z + other.z, w + other.w}; }
+	v4 operator - (v4 other) const { return v4{x - other.x, y - other.y, z - other.z, w - other.w}; }
 
 	static v4 Zero()
 	{
@@ -50,11 +51,21 @@ struct v4
 		return x * v.x + y * v.y + z * v.z + w * v.w;
 	}
 
+	v4 Cross(v4 v) const
+	{
+		return {y*v.z - z*v.y, z*v.x - x*v.z, x*v.y - y*v.x, 0.0f};
+	}
+
 	v4 Normalized() const
 	{
 		return *this * (1.0f / sqrt(Dot(*this)));
 	}
 
+	friend std::ostream& operator << (std::ostream& os, v4 v)
+	{
+		os << "{" << v.x << ", " << v.y << ", " << v.z << ", " << v.w << "}";
+		return os;
+	}
 };
 
 struct b4

@@ -18,15 +18,17 @@ constexpr int Key_Left = 113;
 constexpr int Key_Right = 114;
 
 
-template<i2 size>
+template<typename T, i2 size>
 struct Image
 {
 	constexpr i2 GetSize() const { return size; }
 	void Clear() { memset(pix, 0, sizeof(pix)); }
-	void Set(i2 coords, b4 color) { pix[coords.y][coords.x] = color; }
-	void Add(i2 coords, b4 color) { pix[coords.y][coords.x] += color; }
+	void Clear(T value) { for (int i = 0; i < size.y; ++i) for (int j = 0; j < size.x; ++j) pix[i][j] = value; }
+	void Set(i2 coords, T color) { pix[coords.y][coords.x] = color; }
+	void Add(i2 coords, T color) { pix[coords.y][coords.x] += color; }
+	T Get(i2 coords) const { return pix[coords.y][coords.x]; }
 
-	b4 pix[size.y][size.x];
+	T pix[size.y][size.x];
 };
 
 struct Quad
@@ -66,6 +68,11 @@ struct Quad
 		return (verts[n_1].y - verts[n].y) * (p.x - verts[n].x) - (verts[n_1].x - verts[n].x) * (p.y - verts[n].y);
 	}
 
+	v4 GetNormal() const
+	{
+		return (verts[1] - verts[0]).Cross(verts[2] - verts[0]);
+	}
+
 	friend Quad operator * (Mtx m, const Quad& q)
 	{
 		return Quad{m * q.verts[0],
@@ -102,8 +109,8 @@ struct Camera
 
 int main()
 {
-	Image<{128, 128}> frame;
-	frame.Clear();
+	Image<b4, {128, 128}> frame;
+	Image<float, frame.GetSize()> depth;
 
 	GameWindow window(frame, 8);
 
@@ -132,6 +139,7 @@ int main()
 			input.Update(dt);
 			static float t = 0.0f;
 			t += dt;
+			t = 0.0f;
 			quads.clear();
 			for (int i = 0; i < 4; ++i)
 			for (int j = 0; j < 2; ++j)
@@ -188,7 +196,7 @@ int main()
 			Mtx view
 			{
 				{cosf(camera.angle), 0.0f, sinf(camera.angle), -camera.pos.x * cos(camera.angle) - camera.pos.z * sin(camera.angle)},
-				{0.0f, 1.0f, 0.0f, -camera.pos.y},
+				{0.0f, 1.0f, 0.0f, 															-camera.pos.y																											},
 				{-sinf(camera.angle), 0.0f, cosf(camera.angle), camera.pos.x * sin(camera.angle) - camera.pos.z * cos(camera.angle)},
 				{0.0f, 0.0f, 0.0f, 1.0f}
 			};
@@ -201,6 +209,8 @@ int main()
 			};
 			Mtx view_proj = projection * view; 
 			frame.Clear();
+			const float far = 100.0f;
+			depth.Clear(far);
 			for (Quad q : quads)
 			{
 				q = view_proj * q;
@@ -213,15 +223,21 @@ int main()
 				}
 				for (v4& vert : q.verts)
 					if (vert.w != 0.0f)
-						vert = vert * (1.0f / vert.w); 
-
+					{
+						vert = vert * v4{1.0f / vert.w, 1.0f / vert.w, 1.0f, 1.0f / vert.w};
+					}
+				
 				Mtx to_screen_ctr
 				{
 					v4{0.5f, 0.0f, 0.0f, 0.5f},
-					v4{0.0f, 0.5f, 0.0f, 0.5f}
+					v4{0.0f, 0.5f, 0.0f, 0.5f},
+					v4{0.0f, 0.0f, 1.0f, 0.0f}
 				};
 				q = to_screen_ctr * q;
-
+				v4 normal = q.GetNormal();
+				if (normal.z >= 0.0f)
+					continue;
+				
 				i2 top_left = Floor_i2(q.GetMin() * frame.GetSize());
 				i2 bottom_right = Ceil_i2(q.GetMax() * frame.GetSize());
 				top_left = Clamp(top_left, {0, 0}, frame.GetSize());
@@ -230,6 +246,11 @@ int main()
 				for (int y = top_left.y; y < bottom_right.y; ++y)
 					for (int x = top_left.x; x < bottom_right.x; ++x)
 					{
+						float frame_depth = depth.Get({x, y});
+						float pixel_depth = (q.verts[0].Dot(normal) - (v4{x + 0.5f, y + 0.5f} * frame_size_inv).Dot(normal)) / normal.z;
+						if (pixel_depth > frame_depth)
+							continue;
+
 						const float ms[][2] = {{0.05f, 0.25f}, {0.45f, 0.05f}, {0.55f, 0.95f}, {0.95f, 0.75f}};
 						v4 pixel_color = v4::Zero();
 						for (int i = 0; i < 4; ++i)
@@ -242,12 +263,11 @@ int main()
 							if (e[0] > 0 && e[1] > 0 && e[2] > 0 && e[3] > 0)
 							{
 								pixel_color = v4{q.color.x, q.color.y, q.color.z, pixel_color.w + 0.25f};
-							}
-							else if (e[0] < 0 && e[1] < 0 && e[2] < 0 && e[3] < 0)
-							{
+								depth.Set({x, y}, pixel_depth);
 							}
 						}
-						b4 fp = frame.pix[y][x];
+						
+						b4 fp = frame.Get({x, y});
 						v4 frame_pixel = v4{(float)fp.x, (float)fp.y, (float)fp.z, (float)fp.w} * (1.0f / 255.0f);
 						frame_pixel = pixel_color * pixel_color.w + frame_pixel * (1.0f - pixel_color.w);
 						frame.Set({x, y}, b4(frame_pixel * 255.0f));
