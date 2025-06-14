@@ -110,7 +110,7 @@ struct Camera
 int main()
 {
 	Image<b4, {128, 128}> frame;
-	Image<float, frame.GetSize()> depth;
+	Image<v4, frame.GetSize()> depth;
 
 	GameWindow window(frame, 8);
 
@@ -210,7 +210,7 @@ int main()
 			Mtx view_proj = projection * view; 
 			frame.Clear();
 			const float far = 100.0f;
-			depth.Clear(far);
+			depth.Clear(v4{far, far, far, far});
 			for (Quad q : quads)
 			{
 				q = view_proj * q;
@@ -246,11 +246,8 @@ int main()
 				for (int y = top_left.y; y < bottom_right.y; ++y)
 					for (int x = top_left.x; x < bottom_right.x; ++x)
 					{
-						float frame_depth = depth.Get({x, y});
-						float pixel_depth = (q.verts[0].Dot(normal) - (v4{x + 0.5f, y + 0.5f} * frame_size_inv).Dot(normal)) / normal.z;
-						if (pixel_depth > frame_depth)
-							continue;
-
+						v4 frame_depth = depth.Get({x, y}); // v4 is for 4 float MSAA values
+						
 						const float ms[][2] = {{0.05f, 0.25f}, {0.45f, 0.05f}, {0.55f, 0.95f}, {0.95f, 0.75f}};
 						v4 pixel_color = v4::Zero();
 						for (int i = 0; i < 4; ++i)
@@ -262,11 +259,17 @@ int main()
 													q.GetEdgeValue(p, 3)};
 							if (e[0] > 0 && e[1] > 0 && e[2] > 0 && e[3] > 0)
 							{
-								pixel_color = v4{q.color.x, q.color.y, q.color.z, pixel_color.w + 0.25f};
-								depth.Set({x, y}, pixel_depth);
+								float pixel_depth = (q.verts[0].Dot(normal) - (p).Dot(normal)) / normal.z;
+								if (pixel_depth < frame_depth[i])
+								{
+									pixel_color = v4{q.color.x, q.color.y, q.color.z, pixel_color.w + 0.25f};
+									frame_depth[i] = pixel_depth;
+								}
 							}
 						}
 						
+						depth.Set({x, y}, frame_depth);
+
 						b4 fp = frame.Get({x, y});
 						v4 frame_pixel = v4{(float)fp.x, (float)fp.y, (float)fp.z, (float)fp.w} * (1.0f / 255.0f);
 						frame_pixel = pixel_color * pixel_color.w + frame_pixel * (1.0f - pixel_color.w);

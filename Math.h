@@ -40,6 +40,14 @@ struct v4
 	v4 operator += (v4 other) { x += other.x; y += other.y; z += other.z; w += other.w; return *this; }
 	v4 operator + (v4 other) const { return v4{x + other.x, y + other.y, z + other.z, w + other.w}; }
 	v4 operator - (v4 other) const { return v4{x - other.x, y - other.y, z - other.z, w - other.w}; }
+	float& operator [] (int index) 
+	{
+		if (index == 0) return x;
+		if (index == 1) return y;
+		if (index == 2) return z;
+		if (index == 3) return w;
+		return w;
+	}
 
 	static v4 Zero()
 	{
