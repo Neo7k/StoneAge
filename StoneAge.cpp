@@ -103,16 +103,160 @@ struct Camera
 {
 	v4 GetForward() const { return {-sinf(angle), 0.0f, cosf(angle), 0.0f}; }
 	v4 GetRight() const { return {cosf(angle), 0.0f, sinf(angle), 0.0f}; }
+
+	void Update(const Input& input, float dt)
+	{
+		pos += GetForward() * ((float)input.keys[Key_W] - (float)input.keys[Key_S]) * speed * dt;
+		pos += GetRight() * ((float)input.keys[Key_D] - (float)input.keys[Key_A]) * speed * dt;
+		angle += rotation_speed * dt * ((float)input.keys[Key_Left] - (float)input.keys[Key_Right]);
+	}
+
+	Mtx GetViewMatrix() const
+	{
+		return
+			{
+				{cosf(angle), 0.0f, sinf(angle), -pos.x * cos(angle) - pos.z * sin(angle)},
+				{0.0f, 1.0f, 0.0f, 															-pos.y																											},
+				{-sinf(angle), 0.0f, cosf(angle), pos.x * sin(angle) - pos.z * cos(angle)},
+				{0.0f, 0.0f, 0.0f, 1.0f}
+			};
+	}
+
 	v4 pos = v4::Zero();
 	float angle = 0.0f;
+
+	float speed = 1.0f;
+	float rotation_speed = 1.75f;
 };
+
+void GenerateScene(std::vector<Quad>& quads, float dt)
+{
+	static float t = 0.0f;
+	t += dt;
+	quads.clear();
+
+	for (int i = 0; i < 6; ++i)
+	for (int j = 0; j < 6; ++j)
+	{
+		Mtx mtx
+		{
+			v4{sinf(t), 0.0f, cosf(t), -0.5f + j},
+			v4{0.0f, 1.0f, 0.0f, 0.0f},
+			v4{-cosf(t), 0.0f, sinf(t), 4.0f - (float)i},
+		};
+		quads.emplace_back(mtx*Quad
+		{ 
+			v4{-0.15f, 0.5f, 0.15f},
+			v4{-0.15f, -0.5f, 0.15f},
+			v4{-0.15f, -0.5f, -0.15f},
+			v4{-0.15f, 0.5f, -0.15f},
+			v4{0.0f, 0.0f, 1.0f}
+		});
+		quads.emplace_back(mtx*Quad
+		{ 
+			v4{0.15f, 0.5f, -0.15f},
+			v4{0.15f, -0.5f, -0.15f},
+			v4{0.15f, -0.5f, 0.15f},
+			v4{0.15f, 0.5f, 0.15f},
+			v4{0.0f, 0.0f, 1.0f}
+		});
+		quads.emplace_back(mtx*Quad
+		{ 
+			v4{-0.15f, 0.5f, -0.15f},
+			v4{-0.15f, -0.5f, -0.15f},
+			v4{0.15f, -0.5f, -0.15f},
+			v4{0.15f, 0.5f, -0.15f},
+			v4{1.0f, 0.0f, 0.0f}
+		});
+		quads.emplace_back(mtx*Quad
+		{ 
+			v4{0.15f, 0.5f, 0.15f},
+			v4{0.15f, -0.5f, 0.15f},
+			v4{-0.15f, -0.5f, 0.15f},
+			v4{-0.15f, 0.5f, 0.15f},
+			v4{1.0f, 0.0f, 0.0f}
+		});
+	}
+}
+
+bool TransformQuad(Quad& q, const Mtx& view_proj)
+{
+	q = view_proj * q;
+	if (q.verts[0].z <= 0.0f &&
+			q.verts[1].z <= 0.0f &&
+			q.verts[2].z <= 0.0f &&
+			q.verts[3].z <= 0.0f)
+	{
+		return false;
+	}
+	for (v4& vert : q.verts)
+		if (vert.w != 0.0f)
+		{
+			vert = vert * v4{1.0f / vert.w, 1.0f / vert.w, 1.0f, 1.0f / vert.w};
+		}
+	
+	Mtx to_screen_ctr
+	{
+		v4{0.5f, 0.0f, 0.0f, 0.5f},
+		v4{0.0f, 0.5f, 0.0f, 0.5f},
+		v4{0.0f, 0.0f, 1.0f, 0.0f}
+	};
+	q = to_screen_ctr * q;
+	return true;
+}
+
+void RasterizeQuad(Quad& q, auto& frame, auto& depth)
+{
+	v4 normal = q.GetNormal();
+	if (normal.z >= 0.0f)
+		return;
+
+	i2 top_left = Floor_i2(q.GetMin() * frame.GetSize());
+	i2 bottom_right = Ceil_i2(q.GetMax() * frame.GetSize());
+	top_left = Clamp(top_left, {0, 0}, frame.GetSize());
+	bottom_right = Clamp(bottom_right, {0, 0}, frame.GetSize());
+	v4 frame_size_inv{1.0f / frame.GetSize().x, 1.0f / frame.GetSize().y};
+	for (int y = top_left.y; y < bottom_right.y; ++y)
+		for (int x = top_left.x; x < bottom_right.x; ++x)
+		{
+			v4 frame_depth = depth.Get({x, y}); // v4 is for 4 float MSAA values
+			
+			const float ms[][2] = {{0.05f, 0.25f}, {0.45f, 0.05f}, {0.55f, 0.95f}, {0.95f, 0.75f}};
+			v4 pixel_color = v4::Zero();
+			for (int i = 0; i < 4; ++i)
+			{
+				v4 p = v4{x + ms[i][0], y + ms[i][1]} * frame_size_inv; 
+				float e[4] {q.GetEdgeValue(p, 0),
+										q.GetEdgeValue(p, 1),
+										q.GetEdgeValue(p, 2),
+										q.GetEdgeValue(p, 3)};
+				if (e[0] > 0 && e[1] > 0 && e[2] > 0 && e[3] > 0)
+				{
+					float pixel_depth = (q.verts[0].Dot(normal) - (p).Dot(normal)) / normal.z;
+					if (pixel_depth < frame_depth[i])
+					{
+						pixel_color = v4{q.color.x, q.color.y, q.color.z, pixel_color.w + 0.25f};
+						frame_depth[i] = pixel_depth;
+					}
+				}
+			}
+			
+			depth.Set({x, y}, frame_depth);
+
+			b4 fp = frame.Get({x, y});
+			v4 frame_pixel = v4{(float)fp.x, (float)fp.y, (float)fp.z, (float)fp.w} * (1.0f / 255.0f);
+			frame_pixel = pixel_color * pixel_color.w + frame_pixel * (1.0f - pixel_color.w);
+			frame.Set({x, y}, b4(frame_pixel * 255.0f));
+		}
+}
 
 int main()
 {
 	Image<b4, {128, 128}> frame;
 	Image<v4, frame.GetSize()> depth;
 
-	GameWindow window(frame, 8);
+	constexpr int scale_factor = 8;
+	GameWindow window(frame, scale_factor);
 
 	Input input;
 	auto&& key_fn = [&input](int key, bool is_pressed)
@@ -137,69 +281,12 @@ int main()
 			float dt = dt_dur.count();
 
 			input.Update(dt);
-			static float t = 0.0f;
-			t += dt;
-			t = 0.0f;
-			quads.clear();
-			for (int i = 0; i < 4; ++i)
-			for (int j = 0; j < 2; ++j)
-			{
-				Mtx mtx
-				{
-					v4{sinf(t), 0.0f, cosf(t), -0.5f + j},
-					v4{0.0f, 1.0f, 0.0f, 0.0f},
-					v4{-cosf(t), 0.0f, sinf(t), 4.0f - (float)i},
-				};
-				quads.emplace_back(mtx*Quad
-				{ 
-					v4{-0.15f, 0.5f, 0.15f},
-					v4{-0.15f, -0.5f, 0.15f},
-					v4{-0.15f, -0.5f, -0.15f},
-					v4{-0.15f, 0.5f, -0.15f},
-					v4{0.0f, 0.0f, 1.0f}
-				});
-				quads.emplace_back(mtx*Quad
-				{ 
-					v4{0.15f, 0.5f, -0.15f},
-					v4{0.15f, -0.5f, -0.15f},
-					v4{0.15f, -0.5f, 0.15f},
-					v4{0.15f, 0.5f, 0.15f},
-					v4{0.0f, 0.0f, 1.0f}
-				});
-				quads.emplace_back(mtx*Quad
-				{ 
-					v4{-0.15f, 0.5f, -0.15f},
-					v4{-0.15f, -0.5f, -0.15f},
-					v4{0.15f, -0.5f, -0.15f},
-					v4{0.15f, 0.5f, -0.15f},
-					v4{1.0f, 0.0f, 0.0f}
-				});
-				quads.emplace_back(mtx*Quad
-				{ 
-					v4{0.15f, 0.5f, 0.15f},
-					v4{0.15f, -0.5f, 0.15f},
-					v4{-0.15f, -0.5f, 0.15f},
-					v4{-0.15f, 0.5f, 0.15f},
-					v4{1.0f, 0.0f, 0.0f}
-				});
-			}
-
-			const float camera_speed = 1.0f;
-			camera.pos += camera.GetForward() * ((float)input.keys[Key_W] * camera_speed * dt);
-			camera.pos += camera.GetForward() * ((float)input.keys[Key_S] * camera_speed * dt * -1.0f);
-			camera.pos += camera.GetRight() * ((float)input.keys[Key_D] * camera_speed * dt);
-			camera.pos += camera.GetRight() * ((float)input.keys[Key_A] * camera_speed * dt * -1.0f);
-			const float camera_rotation_speed = 1.75f;
-			camera.angle += camera_rotation_speed * dt * (float)input.keys[Key_Left];
-			camera.angle -= camera_rotation_speed * dt * (float)input.keys[Key_Right];
-
-			Mtx view
-			{
-				{cosf(camera.angle), 0.0f, sinf(camera.angle), -camera.pos.x * cos(camera.angle) - camera.pos.z * sin(camera.angle)},
-				{0.0f, 1.0f, 0.0f, 															-camera.pos.y																											},
-				{-sinf(camera.angle), 0.0f, cosf(camera.angle), camera.pos.x * sin(camera.angle) - camera.pos.z * cos(camera.angle)},
-				{0.0f, 0.0f, 0.0f, 1.0f}
-			};
+			camera.Update(input, dt);
+			
+			GenerateScene(quads, dt);
+			
+			Mtx view = camera.GetViewMatrix();
+			
 			Mtx projection 
 			{
 				{1.0f, 0.0f, 0.0f, 0.0f},
@@ -213,68 +300,8 @@ int main()
 			depth.Clear(v4{far, far, far, far});
 			for (Quad q : quads)
 			{
-				q = view_proj * q;
-				if (q.verts[0].z <= 0.0f &&
-						q.verts[1].z <= 0.0f &&
-						q.verts[2].z <= 0.0f &&
-						q.verts[3].z <= 0.0f)
-				{
-					continue;
-				}
-				for (v4& vert : q.verts)
-					if (vert.w != 0.0f)
-					{
-						vert = vert * v4{1.0f / vert.w, 1.0f / vert.w, 1.0f, 1.0f / vert.w};
-					}
-				
-				Mtx to_screen_ctr
-				{
-					v4{0.5f, 0.0f, 0.0f, 0.5f},
-					v4{0.0f, 0.5f, 0.0f, 0.5f},
-					v4{0.0f, 0.0f, 1.0f, 0.0f}
-				};
-				q = to_screen_ctr * q;
-				v4 normal = q.GetNormal();
-				if (normal.z >= 0.0f)
-					continue;
-				
-				i2 top_left = Floor_i2(q.GetMin() * frame.GetSize());
-				i2 bottom_right = Ceil_i2(q.GetMax() * frame.GetSize());
-				top_left = Clamp(top_left, {0, 0}, frame.GetSize());
-				bottom_right = Clamp(bottom_right, {0, 0}, frame.GetSize());
-				v4 frame_size_inv{1.0f / frame.GetSize().x, 1.0f / frame.GetSize().y};
-				for (int y = top_left.y; y < bottom_right.y; ++y)
-					for (int x = top_left.x; x < bottom_right.x; ++x)
-					{
-						v4 frame_depth = depth.Get({x, y}); // v4 is for 4 float MSAA values
-						
-						const float ms[][2] = {{0.05f, 0.25f}, {0.45f, 0.05f}, {0.55f, 0.95f}, {0.95f, 0.75f}};
-						v4 pixel_color = v4::Zero();
-						for (int i = 0; i < 4; ++i)
-						{
-							v4 p = v4{x + ms[i][0], y + ms[i][1]} * frame_size_inv; 
-							float e[4] {q.GetEdgeValue(p, 0),
-													q.GetEdgeValue(p, 1),
-													q.GetEdgeValue(p, 2),
-													q.GetEdgeValue(p, 3)};
-							if (e[0] > 0 && e[1] > 0 && e[2] > 0 && e[3] > 0)
-							{
-								float pixel_depth = (q.verts[0].Dot(normal) - (p).Dot(normal)) / normal.z;
-								if (pixel_depth < frame_depth[i])
-								{
-									pixel_color = v4{q.color.x, q.color.y, q.color.z, pixel_color.w + 0.25f};
-									frame_depth[i] = pixel_depth;
-								}
-							}
-						}
-						
-						depth.Set({x, y}, frame_depth);
-
-						b4 fp = frame.Get({x, y});
-						v4 frame_pixel = v4{(float)fp.x, (float)fp.y, (float)fp.z, (float)fp.w} * (1.0f / 255.0f);
-						frame_pixel = pixel_color * pixel_color.w + frame_pixel * (1.0f - pixel_color.w);
-						frame.Set({x, y}, b4(frame_pixel * 255.0f));
-					}
+				if (TransformQuad(q, view_proj))
+					RasterizeQuad(q, frame, depth);
 			}
 		};
 	
