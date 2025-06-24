@@ -10,6 +10,10 @@
 #include "Math.h"
 #include "GameWindow.h"
 
+#define CLOG(condition, ...) \
+	if (condition) \
+		std::cout << std::format(__VA_ARGS__) << std::endl;
+
 constexpr int Key_W = 25;
 constexpr int Key_A = 38;
 constexpr int Key_S = 39;
@@ -17,6 +21,7 @@ constexpr int Key_D = 40;
 constexpr int Key_Left = 113;
 constexpr int Key_Right = 114;
 
+bool dltf = false;
 
 template<typename T, i2 size>
 struct Image
@@ -68,9 +73,25 @@ struct Quad
 		return (verts[n_1].y - verts[n].y) * (p.x - verts[n].x) - (verts[n_1].x - verts[n].x) * (p.y - verts[n].y);
 	}
 
+	std::array<v4, 3> GetEdgeVertsExcept(int index) const
+	{
+		if (index == 0)
+			return std::array<v4, 3>{verts[1], verts[3], verts[2]};
+		if (index == 1)
+			return std::array<v4, 3>{verts[2], verts[0], verts[3]};
+		if (index == 2)
+			return std::array<v4, 3>{verts[3], verts[1], verts[0]};
+		if (index == 3)
+			return std::array<v4, 3>{verts[0], verts[2], verts[1]};
+		return {};
+	}
+
 	v4 GetNormal() const
 	{
-		return (verts[1] - verts[0]).Cross(verts[2] - verts[0]);
+		v4 n1 = (verts[1] - verts[0]).Cross(verts[2] - verts[0]);
+		v4 n2 = (verts[2] - verts[0]).Cross(verts[3] - verts[0]);
+		CLOG(dltf, "GetNormal: {}", (fabs(n1.Dot(v4{1.0f, 1.0f, 1.0f, 1.0f})) > fabs(n2.Dot(v4{1.0f, 1.0f, 1.0f, 1.0f}))) ? "1" : "2");
+		return (fabs(n1.Dot(v4{1.0f, 1.0f, 1.0f, 1.0f})) > fabs(n2.Dot(v4{1.0f, 1.0f, 1.0f, 1.0f}))) ? n1 : n2;
 	}
 
 	friend Quad operator * (Mtx m, const Quad& q)
@@ -88,14 +109,24 @@ struct Quad
 
 struct Input 
 {
-	Input() { memset(keys, 0, sizeof(keys)); memset(keys_time, 0, sizeof(keys_time)); }
+	Input() { memset(keys, 0, sizeof(keys)); memset(keys_time, 0, sizeof(keys_time)); memset(keys_has_been_pressed, 0, sizeof(keys_has_been_pressed)); }
 	void Update(float dt) 
 	{
 		for (int i = 0; i < 256; ++i)
 			if (keys[i])
 				keys_time[i] += dt;
 	}
+	bool ConsumeKey(int key)
+	{
+		if (keys_has_been_pressed[key] & 0x2)
+		{
+			keys_has_been_pressed[key] &= 0x1;
+			return true;
+		}
+		return false;
+	}
 	bool keys[256];
+	uchar keys_has_been_pressed[256];
 	float keys_time[256];
 };
 
@@ -113,6 +144,7 @@ struct Camera
 
 	Mtx GetViewMatrix() const
 	{
+		CLOG(dltf, "angle={}", angle);
 		return
 			{
 				{cosf(angle), 0.0f, sinf(angle), -pos.x * cos(angle) - pos.z * sin(angle)},
@@ -126,7 +158,7 @@ struct Camera
 	float angle = 0.0f;
 
 	float speed = 1.0f;
-	float rotation_speed = 1.75f;
+	float rotation_speed = 1.15f;
 };
 
 void GenerateScene(std::vector<Quad>& quads, float dt)
@@ -135,8 +167,8 @@ void GenerateScene(std::vector<Quad>& quads, float dt)
 	t += dt;
 	quads.clear();
 
-	for (int i = 0; i < 6; ++i)
-	for (int j = 0; j < 6; ++j)
+	for (int i = 0; i < 1; ++i)
+	for (int j = 0; j < 1; ++j)
 	{
 		Mtx mtx
 		{
@@ -177,23 +209,97 @@ void GenerateScene(std::vector<Quad>& quads, float dt)
 			v4{1.0f, 0.0f, 0.0f}
 		});
 	}
+	quads.emplace_back(Quad
+	{
+		v4{-5.0f, -0.5f, 5.0f},
+		v4{-5.0f, -0.5f, -5.0f},
+		v4{5.0f, -0.5f, -5.0f},
+		v4{5.0f, -0.5f, 5.0f},
+		v4{0.5f, 0.5f, 0.5f}
+	});
 }
 
-bool TransformQuad(Quad& q, const Mtx& view_proj)
+
+enum class TransformResult
+{
+	Discard,
+	Ok,
+	Split
+};
+
+TransformResult TransformQuad(Quad& q, const Mtx& view_proj, Quad& split_quad)
 {
 	q = view_proj * q;
-	if (q.verts[0].z <= 0.0f &&
-			q.verts[1].z <= 0.0f &&
-			q.verts[2].z <= 0.0f &&
-			q.verts[3].z <= 0.0f)
+	const float near = 0.1f;
+	if (q.verts[0].z < near &&
+			q.verts[1].z < near &&
+			q.verts[2].z < near &&
+			q.verts[3].z < near)
 	{
-		return false;
+		return TransformResult::Discard;
 	}
-	for (v4& vert : q.verts)
-		if (vert.w != 0.0f)
+	Quad qcopy = q;
+	for (int i = 0; i < 4; ++i)
+	{
+		v4& vert = q.verts[i];
+		float depth = vert.z - near;
+		if (depth < 0.0f)
 		{
-			vert = vert * v4{1.0f / vert.w, 1.0f / vert.w, 1.0f, 1.0f / vert.w};
+			auto others = qcopy.GetEdgeVertsExcept(i);
+			using Intersection = std::optional<v4>;
+			auto&& f = [depth, near](v4 a, v4 b) -> Intersection
+			{
+				a.w = b.w = 0.0f;
+				v4 e = b - a;
+				const float epsilon = 0.001f;
+				if (fabs(e.z) < epsilon)
+					return {};
+
+				v4 c = {a.x - depth * e.x / e.z, a.y - depth * e.y / e.z, near, 0.0f};
+				CLOG(dltf, "a={} b={} depth={} c={}", a, b, depth, c);
+				if ((c - b).Dot(c - a) < 0.0f)
+					return v4{c.x, c.y, c.z, near};
+				return {};
+			};
+			Intersection intersects[2] = {f(vert, others[0]), f(vert, others[1])};
+			int num = std::ranges::count(intersects, true, &Intersection::has_value);
+			auto&& log = [&](auto inter) 
+			{ 
+				CLOG(dltf, "scenario={} vidx={} inter={}", num, i, inter ? std::format({"{}"}, inter.value()) : "none");
+			};
+			if (num == 0)
+			{
+				log(f(vert, others[2]));
+				vert = f(vert, others[2]).value();
+			}
+			if (num == 1)
+			{
+				log(intersects[0] ? intersects[0] : intersects[1]);
+				vert = intersects[0] ? intersects[0].value() : intersects[1].value();
+			}
+			if (num == 2)
+			{
+				split_quad = qcopy;
+				log(f(vert, others[2]));
+				v4 middle = f(vert, others[2]).value();
+				log(intersects[0]);
+				vert = intersects[0].value();
+				q.verts[(i + 3) % 4] = middle;
+				split_quad.verts[i] = intersects[1].value(); 
+				split_quad.verts[(i + 1) % 4] = middle;
+				return TransformResult::Split;
+			}
 		}
+	}
+	return TransformResult::Ok;
+}
+
+void PerspectiveTransformQuad(Quad& q)
+{
+	for (v4& vert : q.verts)
+	{
+		vert = vert * v4{1.0f / vert.w, 1.0f / vert.w, 1.0f, 1.0f / vert.w};
+	}
 	
 	Mtx to_screen_ctr
 	{
@@ -202,7 +308,6 @@ bool TransformQuad(Quad& q, const Mtx& view_proj)
 		v4{0.0f, 0.0f, 1.0f, 0.0f}
 	};
 	q = to_screen_ctr * q;
-	return true;
 }
 
 void RasterizeQuad(Quad& q, auto& frame, auto& depth)
@@ -210,6 +315,12 @@ void RasterizeQuad(Quad& q, auto& frame, auto& depth)
 	v4 normal = q.GetNormal();
 	if (normal.z >= 0.0f)
 		return;
+
+	for (int i = 0; i < 4; ++i)
+	{
+		CLOG(dltf, "v[{}] (scr) = {}", i, q.verts[i]);
+	}
+	CLOG(dltf, "normal (scr) = {}", normal);
 
 	i2 top_left = Floor_i2(q.GetMin() * frame.GetSize());
 	i2 bottom_right = Ceil_i2(q.GetMax() * frame.GetSize());
@@ -263,7 +374,12 @@ int main()
 	{
 		input.keys[key] = is_pressed;
 		if (!is_pressed)
+		{
 			input.keys_time[key] = 0.0f;
+			input.keys_has_been_pressed[key] &= 0x2;
+		}
+		else if (input.keys_has_been_pressed[key] == 0u)
+			input.keys_has_been_pressed[key] = 3;
 	};
 
 	auto frame_start = std::chrono::steady_clock::now();
@@ -281,11 +397,15 @@ int main()
 			float dt = dt_dur.count();
 
 			input.Update(dt);
+			dltf = input.ConsumeKey(51);
+
 			camera.Update(input, dt);
 			
 			GenerateScene(quads, dt);
 			
 			Mtx view = camera.GetViewMatrix();
+			for (auto l : view.lines)
+			CLOG(dltf, "view: {}", l);
 			
 			Mtx projection 
 			{
@@ -300,8 +420,18 @@ int main()
 			depth.Clear(v4{far, far, far, far});
 			for (Quad q : quads)
 			{
-				if (TransformQuad(q, view_proj))
+				Quad split_quad;
+				auto transform_result = TransformQuad(q, view_proj, split_quad);
+				if (transform_result != TransformResult::Discard)
+				{
+					PerspectiveTransformQuad(q);
 					RasterizeQuad(q, frame, depth);
+					if (transform_result == TransformResult::Split)
+					{
+						PerspectiveTransformQuad(split_quad);
+						RasterizeQuad(split_quad, frame, depth);
+					}
+				}
 			}
 		};
 	

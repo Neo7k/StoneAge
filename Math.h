@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include <algorithm>
+#include <format>
 
 #include "Common.h"
 
@@ -73,6 +74,19 @@ struct v4
 	{
 		os << "{" << v.x << ", " << v.y << ", " << v.z << ", " << v.w << "}";
 		return os;
+	}
+};
+
+template<>
+struct std::formatter<v4>
+{
+	constexpr auto parse(std::format_parse_context& ctx)
+	{
+		return ctx.begin();
+	}
+	auto format(const v4& v, std::format_context& ctx) const
+	{
+		return std::format_to(ctx.out(), "{{{}, {}, {}, {}}}", v.x, v.y, v.z, v.w);
 	}
 };
 

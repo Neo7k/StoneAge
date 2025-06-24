@@ -63,25 +63,38 @@ struct GameWindow
 	{
 		while (!done)
 		{
+			XEvent prev_event{};
 			while (XPending(xdisplay))
 			{
 				XEvent event;
 				XNextEvent(xdisplay, &event);
+				bool key_repeat = false;
 				switch (event.type)
 				{
 					case KeyPress:
-						key_fn(event.xkey.keycode, true);
+						if (!(prev_event.type == KeyRelease && prev_event.xkey.keycode == event.xkey.keycode && prev_event.xkey.time == event.xkey.time))
+							key_fn(event.xkey.keycode, true);
+						else
+							key_repeat = true;
+
 						if (event.xkey.keycode == Key_Escape)
 							done = true;
 						break;
 					case KeyRelease:
-						key_fn(event.xkey.keycode, false);
+						break;
 					case ClientMessage:
 						if (event.xclient.data.l[0] == wm_delete_window)
 							done = true;
 						break;
 				}
+
+				if (!key_repeat && prev_event.type == KeyRelease)
+					key_fn(prev_event.xkey.keycode, false);
+
+				prev_event = event;
 			}
+			if (prev_event.type == KeyRelease)
+					key_fn(prev_event.xkey.keycode, false);
 
 			frame_fn();
 			
