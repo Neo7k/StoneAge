@@ -28,6 +28,8 @@ struct v4
 	float w;
 
 	v4() = default;
+	v4(float val)
+		: x(val), y(val), z(val), w(val) {}
 	v4(float in_x, float in_y, float in_z, float in_w)
 		: x(in_x), y(in_y), z(in_z), w(in_w) {}
 	v4(float in_x, float in_y)
@@ -38,6 +40,7 @@ struct v4
 	v4 operator * (i2 other) const { return v4{x * other.x, y * other.y, z, w};	}
 	v4 operator * (v4 other) const { return v4{x * other.x, y * other.y, z * other.z, w * other.w}; }
 	v4 operator * (float other) const { return v4{x * other, y * other, z * other, w * other}; }
+	void operator /= (float other) { x /= other; y /= other; z /= other; w /= other; }
 	v4 operator += (v4 other) { x += other.x; y += other.y; z += other.z; w += other.w; return *this; }
 	v4 operator + (v4 other) const { return v4{x + other.x, y + other.y, z + other.z, w + other.w}; }
 	v4 operator - (v4 other) const { return v4{x - other.x, y - other.y, z - other.z, w - other.w}; }

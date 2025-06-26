@@ -21,7 +21,8 @@ constexpr int Key_D = 40;
 constexpr int Key_Left = 113;
 constexpr int Key_Right = 114;
 
-bool dltf = false;
+constexpr float Near = 0.1f;
+constexpr float Far = 20.0f;
 
 template<typename T, i2 size>
 struct Image
@@ -90,7 +91,6 @@ struct Quad
 	{
 		v4 n1 = (verts[1] - verts[0]).Cross(verts[2] - verts[0]);
 		v4 n2 = (verts[2] - verts[0]).Cross(verts[3] - verts[0]);
-		CLOG(dltf, "GetNormal: {}", (fabs(n1.Dot(v4{1.0f, 1.0f, 1.0f, 1.0f})) > fabs(n2.Dot(v4{1.0f, 1.0f, 1.0f, 1.0f}))) ? "1" : "2");
 		return (fabs(n1.Dot(v4{1.0f, 1.0f, 1.0f, 1.0f})) > fabs(n2.Dot(v4{1.0f, 1.0f, 1.0f, 1.0f}))) ? n1 : n2;
 	}
 
@@ -144,11 +144,10 @@ struct Camera
 
 	Mtx GetViewMatrix() const
 	{
-		CLOG(dltf, "angle={}", angle);
 		return
 			{
 				{cosf(angle), 0.0f, sinf(angle), -pos.x * cos(angle) - pos.z * sin(angle)},
-				{0.0f, 1.0f, 0.0f, 															-pos.y																											},
+				{0.0f, 1.0f, 0.0f, 										-pos.y														 },
 				{-sinf(angle), 0.0f, cosf(angle), pos.x * sin(angle) - pos.z * cos(angle)},
 				{0.0f, 0.0f, 0.0f, 1.0f}
 			};
@@ -167,14 +166,15 @@ void GenerateScene(std::vector<Quad>& quads, float dt)
 	t += dt;
 	quads.clear();
 
-	for (int i = 0; i < 1; ++i)
-	for (int j = 0; j < 1; ++j)
+	for (int i = 0; i < 6; ++i)
+	for (int j = 0; j < 6; ++j)
 	{
+		float angle = t + i + j * 0.5;
 		Mtx mtx
 		{
-			v4{sinf(t), 0.0f, cosf(t), -0.5f + j},
+			v4{cosf(angle), 0.0f, -sinf(angle), -0.0f + j},
 			v4{0.0f, 1.0f, 0.0f, 0.0f},
-			v4{-cosf(t), 0.0f, sinf(t), 4.0f - (float)i},
+			v4{sinf(angle), 0.0f, cosf(angle), 1.0f - (float)i},
 		};
 		quads.emplace_back(mtx*Quad
 		{ 
@@ -190,7 +190,7 @@ void GenerateScene(std::vector<Quad>& quads, float dt)
 			v4{0.15f, -0.5f, -0.15f},
 			v4{0.15f, -0.5f, 0.15f},
 			v4{0.15f, 0.5f, 0.15f},
-			v4{0.0f, 0.0f, 1.0f}
+			v4{0.0f, 1.0f, 0.0f}
 		});
 		quads.emplace_back(mtx*Quad
 		{ 
@@ -198,7 +198,7 @@ void GenerateScene(std::vector<Quad>& quads, float dt)
 			v4{-0.15f, -0.5f, -0.15f},
 			v4{0.15f, -0.5f, -0.15f},
 			v4{0.15f, 0.5f, -0.15f},
-			v4{1.0f, 0.0f, 0.0f}
+			v4{1.0f, 1.0f, 0.0f}
 		});
 		quads.emplace_back(mtx*Quad
 		{ 
@@ -229,12 +229,10 @@ enum class TransformResult
 
 TransformResult TransformQuad(Quad& q, const Mtx& view_proj, Quad& split_quad)
 {
-	q = view_proj * q;
-	const float near = 0.1f;
-	if (q.verts[0].z < near &&
-			q.verts[1].z < near &&
-			q.verts[2].z < near &&
-			q.verts[3].z < near)
+	if (q.verts[0].z < 0.0f &&
+			q.verts[1].z < 0.0f &&
+			q.verts[2].z < 0.0f &&
+			q.verts[3].z < 0.0f)
 	{
 		return TransformResult::Discard;
 	}
@@ -242,47 +240,37 @@ TransformResult TransformQuad(Quad& q, const Mtx& view_proj, Quad& split_quad)
 	for (int i = 0; i < 4; ++i)
 	{
 		v4& vert = q.verts[i];
-		float depth = vert.z - near;
+		float depth = vert.z;
 		if (depth < 0.0f)
 		{
 			auto others = qcopy.GetEdgeVertsExcept(i);
 			using Intersection = std::optional<v4>;
-			auto&& f = [depth, near](v4 a, v4 b) -> Intersection
+			auto&& f = [depth](v4 a, v4 b) -> Intersection
 			{
-				a.w = b.w = 0.0f;
 				v4 e = b - a;
-				const float epsilon = 0.001f;
-				if (fabs(e.z) < epsilon)
+				constexpr float Epsilon = 1e-6f;
+				if (fabs(e.z) < Epsilon)
 					return {};
 
-				v4 c = {a.x - depth * e.x / e.z, a.y - depth * e.y / e.z, near, 0.0f};
-				CLOG(dltf, "a={} b={} depth={} c={}", a, b, depth, c);
+				v4 c = {a.x - depth * e.x / e.z, a.y - depth * e.y / e.z, 0.0f, Near};
 				if ((c - b).Dot(c - a) < 0.0f)
-					return v4{c.x, c.y, c.z, near};
+					return c;
 				return {};
 			};
 			Intersection intersects[2] = {f(vert, others[0]), f(vert, others[1])};
 			int num = std::ranges::count(intersects, true, &Intersection::has_value);
-			auto&& log = [&](auto inter) 
-			{ 
-				CLOG(dltf, "scenario={} vidx={} inter={}", num, i, inter ? std::format({"{}"}, inter.value()) : "none");
-			};
 			if (num == 0)
 			{
-				log(f(vert, others[2]));
 				vert = f(vert, others[2]).value();
 			}
 			if (num == 1)
 			{
-				log(intersects[0] ? intersects[0] : intersects[1]);
 				vert = intersects[0] ? intersects[0].value() : intersects[1].value();
 			}
 			if (num == 2)
 			{
 				split_quad = qcopy;
-				log(f(vert, others[2]));
 				v4 middle = f(vert, others[2]).value();
-				log(intersects[0]);
 				vert = intersects[0].value();
 				q.verts[(i + 3) % 4] = middle;
 				split_quad.verts[i] = intersects[1].value(); 
@@ -298,7 +286,7 @@ void PerspectiveTransformQuad(Quad& q)
 {
 	for (v4& vert : q.verts)
 	{
-		vert = vert * v4{1.0f / vert.w, 1.0f / vert.w, 1.0f, 1.0f / vert.w};
+		vert /= vert.w;
 	}
 	
 	Mtx to_screen_ctr
@@ -315,12 +303,6 @@ void RasterizeQuad(Quad& q, auto& frame, auto& depth)
 	v4 normal = q.GetNormal();
 	if (normal.z >= 0.0f)
 		return;
-
-	for (int i = 0; i < 4; ++i)
-	{
-		CLOG(dltf, "v[{}] (scr) = {}", i, q.verts[i]);
-	}
-	CLOG(dltf, "normal (scr) = {}", normal);
 
 	i2 top_left = Floor_i2(q.GetMin() * frame.GetSize());
 	i2 bottom_right = Ceil_i2(q.GetMax() * frame.GetSize());
@@ -397,30 +379,27 @@ int main()
 			float dt = dt_dur.count();
 
 			input.Update(dt);
-			dltf = input.ConsumeKey(51);
 
 			camera.Update(input, dt);
 			
 			GenerateScene(quads, dt);
 			
 			Mtx view = camera.GetViewMatrix();
-			for (auto l : view.lines)
-			CLOG(dltf, "view: {}", l);
 			
 			Mtx projection 
 			{
 				{1.0f, 0.0f, 0.0f, 0.0f},
 				{0.0f, -1.0f, 0.0f, 0.0f},
-				{0.0f, 0.0f, 1.0f, 0.0f},
+				{0.0f, 0.0f, Far / (Far - Near), -Far * Near / (Far - Near)},
 				{0.0f, 0.0f, 1.0f, 0.0f} 
 			};
 			Mtx view_proj = projection * view; 
 			frame.Clear();
-			const float far = 100.0f;
-			depth.Clear(v4{far, far, far, far});
+			depth.Clear(v4{Far});
 			for (Quad q : quads)
 			{
 				Quad split_quad;
+				q = view_proj * q;
 				auto transform_result = TransformQuad(q, view_proj, split_quad);
 				if (transform_result != TransformResult::Discard)
 				{
