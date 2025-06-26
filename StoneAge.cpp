@@ -33,6 +33,14 @@ struct Image
 	void Set(i2 coords, T color) { pix[coords.y][coords.x] = color; }
 	void Add(i2 coords, T color) { pix[coords.y][coords.x] += color; }
 	T Get(i2 coords) const { return pix[coords.y][coords.x]; }
+	T& At(i2 coords) { return pix[coords.y][coords.x]; }
+	template<typename CopyFunc>
+	void CopyFrom(auto& image, CopyFunc&& copy_fn)
+	{
+		for (int i = 0; i < size.y; ++i)
+			for (int j = 0; j < size.x; ++j)
+				pix[i][j] = copy_fn(image.pix[i][j]);
+	}
 
 	T pix[size.y][size.x];
 };
@@ -312,10 +320,10 @@ void RasterizeQuad(Quad& q, auto& frame, auto& depth)
 	for (int y = top_left.y; y < bottom_right.y; ++y)
 		for (int x = top_left.x; x < bottom_right.x; ++x)
 		{
-			v4 frame_depth = depth.Get({x, y}); // v4 is for 4 float MSAA values
+			v4& frame_depth = depth.At({x, y}); // v4 is for 4 float MSAA values
 			
 			const float ms[][2] = {{0.05f, 0.25f}, {0.45f, 0.05f}, {0.55f, 0.95f}, {0.95f, 0.75f}};
-			v4 pixel_color = v4::Zero();
+			auto& pixel_color = frame.At({x, y});
 			for (int i = 0; i < 4; ++i)
 			{
 				v4 p = v4{x + ms[i][0], y + ms[i][1]} * frame_size_inv; 
@@ -328,24 +336,18 @@ void RasterizeQuad(Quad& q, auto& frame, auto& depth)
 					float pixel_depth = (q.verts[0].Dot(normal) - (p).Dot(normal)) / normal.z;
 					if (pixel_depth < frame_depth[i])
 					{
-						pixel_color = v4{q.color.x, q.color.y, q.color.z, pixel_color.w + 0.25f};
+						pixel_color[i] = q.color;
 						frame_depth[i] = pixel_depth;
 					}
 				}
 			}
-			
-			depth.Set({x, y}, frame_depth);
-
-			b4 fp = frame.Get({x, y});
-			v4 frame_pixel = v4{(float)fp.x, (float)fp.y, (float)fp.z, (float)fp.w} * (1.0f / 255.0f);
-			frame_pixel = pixel_color * pixel_color.w + frame_pixel * (1.0f - pixel_color.w);
-			frame.Set({x, y}, b4(frame_pixel * 255.0f));
 		}
 }
 
 int main()
 {
 	Image<b4, {128, 128}> frame;
+	Image<std::array<v4, 4>, frame.GetSize()> frame_ms; // 4 colors for multisampling
 	Image<v4, frame.GetSize()> depth;
 
 	constexpr int scale_factor = 8;
@@ -395,6 +397,7 @@ int main()
 			};
 			Mtx view_proj = projection * view; 
 			frame.Clear();
+			frame_ms.Clear();
 			depth.Clear(v4{Far});
 			for (Quad q : quads)
 			{
@@ -404,14 +407,17 @@ int main()
 				if (transform_result != TransformResult::Discard)
 				{
 					PerspectiveTransformQuad(q);
-					RasterizeQuad(q, frame, depth);
+					RasterizeQuad(q, frame_ms, depth);
 					if (transform_result == TransformResult::Split)
 					{
 						PerspectiveTransformQuad(split_quad);
-						RasterizeQuad(split_quad, frame, depth);
+						RasterizeQuad(split_quad, frame_ms, depth);
 					}
 				}
 			}
+			frame.CopyFrom(frame_ms, 
+					[](const std::array<v4, 4>& pix) 
+					{return b4((pix[0] + pix[1] + pix[2] + pix[3]) * (255.0f / 4.0f));});
 		};
 	
 	window.Run(frame_fn, key_fn);
