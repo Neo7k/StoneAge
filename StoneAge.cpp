@@ -10,6 +10,8 @@
 #include "Math.h"
 #include "GameWindow.h"
 
+#define LOG(...) \
+		std::cout << std::format(__VA_ARGS__) << std::endl;
 #define CLOG(condition, ...) \
 	if (condition) \
 		std::cout << std::format(__VA_ARGS__) << std::endl;
@@ -27,22 +29,30 @@ constexpr float Far = 20.0f;
 template<typename T, i2 size>
 struct Image
 {
+	Image()
+	{
+		pix = new T[size.x * size.y];
+	}
+	~Image()
+	{
+		delete[] pix;
+	}
+
 	constexpr i2 GetSize() const { return size; }
-	void Clear() { memset(pix, 0, sizeof(pix)); }
-	void Clear(T value) { for (int i = 0; i < size.y; ++i) for (int j = 0; j < size.x; ++j) pix[i][j] = value; }
-	void Set(i2 coords, T color) { pix[coords.y][coords.x] = color; }
-	void Add(i2 coords, T color) { pix[coords.y][coords.x] += color; }
-	T Get(i2 coords) const { return pix[coords.y][coords.x]; }
-	T& At(i2 coords) { return pix[coords.y][coords.x]; }
+	void Clear() { memset(pix, 0, size.x * size.y * sizeof(T)); }
+	void Clear(T value) { for (int i = 0; i < size.x * size.y; ++i) pix[i] = value; }
+	void Set(i2 coords, T color) { pix[coords.y * size.x + coords.x] = color; }
+	void Add(i2 coords, T color) { pix[coords.y * size.x + coords.x] += color; }
+	T Get(i2 coords) const { return pix[coords.y * size.x + coords.x]; }
+	T& At(i2 coords) { return pix[coords.y * size.x + coords.x]; }
 	template<typename CopyFunc>
 	void CopyFrom(auto& image, CopyFunc&& copy_fn)
 	{
-		for (int i = 0; i < size.y; ++i)
-			for (int j = 0; j < size.x; ++j)
-				pix[i][j] = copy_fn(image.pix[i][j]);
+		for (int i = 0; i < size.x * size.y; ++i)
+				pix[i] = copy_fn(image.pix[i]);
 	}
 
-	T pix[size.y][size.x];
+	T* pix;
 };
 
 struct Quad
@@ -174,15 +184,16 @@ void GenerateScene(std::vector<Quad>& quads, float dt)
 	t += dt;
 	quads.clear();
 
-	for (int i = 0; i < 6; ++i)
-	for (int j = 0; j < 6; ++j)
+	constexpr int num_columns = 16;
+	for (int i = 0; i < num_columns; ++i)
+	for (int j = 0; j < num_columns; ++j)
 	{
 		float angle = t + i + j * 0.5;
 		Mtx mtx
 		{
-			v4{cosf(angle), 0.0f, -sinf(angle), -0.0f + j},
+			v4{cosf(angle), 0.0f, -sinf(angle), float(j - num_columns / 2)},
 			v4{0.0f, 1.0f, 0.0f, 0.0f},
-			v4{sinf(angle), 0.0f, cosf(angle), 1.0f - (float)i},
+			v4{sinf(angle), 0.0f, cosf(angle), float(i - num_columns / 2)},
 		};
 		quads.emplace_back(mtx*Quad
 		{ 
@@ -269,7 +280,10 @@ TransformResult TransformQuad(Quad& q, const Mtx& view_proj, Quad& split_quad)
 			int num = std::ranges::count(intersects, true, &Intersection::has_value);
 			if (num == 0)
 			{
-				vert = f(vert, others[2]).value();
+				auto cross = f(vert, others[2]);
+				assert(cross);
+				if (cross)
+					vert = cross.value();
 			}
 			if (num == 1)
 			{
@@ -278,11 +292,15 @@ TransformResult TransformQuad(Quad& q, const Mtx& view_proj, Quad& split_quad)
 			if (num == 2)
 			{
 				split_quad = qcopy;
-				v4 middle = f(vert, others[2]).value();
+				auto middle = f(vert, others[2]);
+				assert(middle);
+				if (!middle)
+					return TransformResult::Discard;
+
 				vert = intersects[0].value();
-				q.verts[(i + 3) % 4] = middle;
+				q.verts[(i + 3) % 4] = middle.value();
 				split_quad.verts[i] = intersects[1].value(); 
-				split_quad.verts[(i + 1) % 4] = middle;
+				split_quad.verts[(i + 1) % 4] = middle.value();
 				return TransformResult::Split;
 			}
 		}
@@ -293,9 +311,7 @@ TransformResult TransformQuad(Quad& q, const Mtx& view_proj, Quad& split_quad)
 void PerspectiveTransformQuad(Quad& q)
 {
 	for (v4& vert : q.verts)
-	{
 		vert /= vert.w;
-	}
 	
 	Mtx to_screen_ctr
 	{
@@ -333,7 +349,7 @@ void RasterizeQuad(Quad& q, auto& frame, auto& depth)
 										q.GetEdgeValue(p, 3)};
 				if (e[0] > 0 && e[1] > 0 && e[2] > 0 && e[3] > 0)
 				{
-					float pixel_depth = (q.verts[0].Dot(normal) - (p).Dot(normal)) / normal.z;
+					float pixel_depth = (q.verts[0].Dot(normal) - p.Dot(normal)) / normal.z;
 					if (pixel_depth < frame_depth[i])
 					{
 						pixel_color[i] = q.color;
@@ -344,13 +360,41 @@ void RasterizeQuad(Quad& q, auto& frame, auto& depth)
 		}
 }
 
+template<int num_frames>
+struct PerfTracker
+{
+	PerfTracker()
+	{
+		times.fill(0.0f);	
+	}
+	void Update(float dt)
+	{
+		static uint frame_index = 0;
+		++frame_index;
+		float dt_ms = dt * 1000.0f;
+		times[frame_index % num_frames] = dt_ms;
+		auto times_cpy = times;
+		std::sort(times_cpy.begin(), times_cpy.end());
+		float mean = times_cpy[1 + (num_frames / 2)];
+		float ratio = mean / last;
+		if (ratio < 0.7f || ratio > 1.3f)
+		{
+			LOG("frame time: {} ms", mean);
+			last = mean;
+		}
+	}
+
+	std::array<float, num_frames> times;
+	float last = 0.0f;
+};
+
 int main()
 {
-	Image<b4, {128, 128}> frame;
+	Image<b4, {1024, 1024}> frame;
 	Image<std::array<v4, 4>, frame.GetSize()> frame_ms; // 4 colors for multisampling
 	Image<v4, frame.GetSize()> depth;
 
-	constexpr int scale_factor = 8;
+	constexpr int scale_factor = 1;
 	GameWindow window(frame, scale_factor);
 
 	Input input;
@@ -368,6 +412,8 @@ int main()
 
 	auto frame_start = std::chrono::steady_clock::now();
 
+	PerfTracker<5> perf;
+
 	Camera camera;
 	std::vector<Quad> quads;
 
@@ -380,8 +426,9 @@ int main()
 			frame_start = now;
 			float dt = dt_dur.count();
 
-			input.Update(dt);
+			perf.Update(dt);
 
+			input.Update(dt);
 			camera.Update(input, dt);
 			
 			GenerateScene(quads, dt);

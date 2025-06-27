@@ -106,10 +106,11 @@ struct GameWindow
 						{
 							int si = (i * scale_factor + k) * frame_size.x * scale_factor * 4;
 							int sj = (j * scale_factor + l) * 4;
-							xframe->data[si + sj + 0] = frame.pix[i][j].z;
-							xframe->data[si + sj + 1] = frame.pix[i][j].y;
-							xframe->data[si + sj + 2] = frame.pix[i][j].x;
-							xframe->data[si + sj + 3] = frame.pix[i][j].w;
+							b4 frame_pix = frame.Get({j, i});
+							xframe->data[si + sj + 0] = frame_pix.z;
+							xframe->data[si + sj + 1] = frame_pix.y;
+							xframe->data[si + sj + 2] = frame_pix.x;
+							xframe->data[si + sj + 3] = frame_pix.w;
 						}
 
 			
