@@ -35,6 +35,8 @@ constexpr int Key_Right = 114;
 constexpr float Near = 0.1f;
 constexpr float Far = 20.0f;
 
+bool ltf = false;
+
 template<typename T, i2 size>
 struct Image
 {
@@ -282,7 +284,7 @@ TransformResult TransformQuad(Quad& q, const Mtx& view_proj, Quad& split_quad)
 					return {};
 
 				v4 c = {a.x - depth * e.x / e.z, a.y - depth * e.y / e.z, 0.0f, Near};
-				if ((c - b).Dot(c - a) < 0.0f)
+				if ((c - b).Dot(c - a) <= 0.0f)
 					return c;
 				return {};
 			};
@@ -336,8 +338,6 @@ void PerspectiveTransformQuad(Quad& q)
 void RasterizeQuad(Quad& q, auto& frame, auto& depth, i2 tiles)
 {
 	v4 normal = q.GetNormal();
-	if (normal.z >= 0.0f)
-		return;
 
 	int tile = tiles.x;
 	int num_tiles = tiles.y;
@@ -357,7 +357,7 @@ void RasterizeQuad(Quad& q, auto& frame, auto& depth, i2 tiles)
 		{
 			v4& frame_depth = depth.At({x, y}); // v4 is for 4 float MSAA values
 			
-			const float ms[][2] = {{0.05f, 0.25f}, {0.45f, 0.05f}, {0.55f, 0.95f}, {0.95f, 0.75f}};
+			constexpr float ms[][2] = {{0.05f, 0.25f}, {0.45f, 0.05f}, {0.55f, 0.95f}, {0.95f, 0.75f}};
 			auto& pixel_color = frame.At({x, y});
 			for (int i = 0; i < 4; ++i)
 			{
@@ -406,6 +406,58 @@ struct PerfTracker
 	std::array<float, num_frames> times;
 	float last = 0.0f;
 };
+
+struct MeasureTime
+{
+	MeasureTime(const char* in_comment)
+		: comment(in_comment)
+	{
+		time_point = std::chrono::high_resolution_clock::now();
+	}
+	MeasureTime(const char* in_comment, int in_thread_id, int in_thread_count)
+		: comment(in_comment)
+		, thread_id(in_thread_id)
+		, thread_count(in_thread_count)
+	{
+		time_points[thread_id] = std::chrono::high_resolution_clock::now();
+	}
+
+	~MeasureTime()
+	{
+		if (thread_count == 0)
+		{
+			std::chrono::duration<float, std::milli> duration = std::chrono::high_resolution_clock::now() - time_point;
+			CLOG(ltf, "{} = {}", comment, duration.count());
+			return;
+		}
+
+		finish_time_points[thread_id] = std::chrono::high_resolution_clock::now();
+		arrived_threads_count.fetch_add(1);
+		if (arrived_threads_count.load() == thread_count)
+		{
+			std::stringstream ss;
+			ss << comment << " ";
+			for (int i = 0; i < thread_count; ++i)
+			{
+				std::chrono::duration<float, std::milli> duration = finish_time_points[i] - time_points[i];
+				ss << duration.count() << " | ";
+			}
+			ss << std::endl;
+			CLOG(ltf, "{}", ss.str());
+			arrived_threads_count.store(0);
+		}
+	}
+	const char* comment = nullptr;
+	int thread_id = 0;
+	int thread_count = 0;
+	std::chrono::high_resolution_clock::time_point time_point;
+	static std::atomic_int arrived_threads_count;
+	static std::chrono::high_resolution_clock::time_point time_points[64];
+	static std::chrono::high_resolution_clock::time_point finish_time_points[64];
+};
+std::chrono::high_resolution_clock::time_point MeasureTime::time_points[64];
+std::chrono::high_resolution_clock::time_point MeasureTime::finish_time_points[64];
+std::atomic_int MeasureTime::arrived_threads_count{0};
 
 struct Jobs
 {
@@ -495,14 +547,17 @@ int main()
 	{
 		if (jobs.done.test())
 			return;
+
 		auto now = std::chrono::steady_clock::now();
 		std::chrono::duration<float> dt_dur = now - frame_start;
 		frame_start = now;
 		float dt = dt_dur.count();
 
+		MeasureTime mt("frame start");
 		perf.Update(dt);
 
 		input.Update(dt);
+		ltf = input.ConsumeKey(24);
 		camera.Update(input, dt);
 		
 		GenerateScene(quads, dt);
@@ -515,6 +570,7 @@ int main()
 
 	std::barrier collect_quads_barrier(jobs.GetSize() + 1, [&]()
 	{
+		MeasureTime mt("collect quads");
 		uint n_vq = std::accumulate(thread_data.begin(), thread_data.end(), 0u, [](uint v, auto& s) {return v + s.valid_qids.size();});
 		uint n_s = std::accumulate(thread_data.begin(), thread_data.end(), 0u, [](uint v, auto& s) {return v + s.splinters.size();});
 		valid_qids.clear();
@@ -530,6 +586,7 @@ int main()
 
 	std::barrier copy_image_barrier(jobs.GetSize() + 1, [&]()
 	{
+		MeasureTime mt("copy image");
 		frame.CopyFrom(frame_ms, 
 		[](const std::array<v4, 4>& pix) 
 		{return b4((pix[0] + pix[1] + pix[2] + pix[3]) * (255.0f / 4.0f));});
@@ -545,25 +602,31 @@ int main()
 
 		int nthreads = jobs.GetSize();
 		int chunk_size = (quads.size() + nthreads - 1) / nthreads;
-		
-		thread_data[thread_id].valid_qids.clear();
-		thread_data[thread_id].splinters.clear();
-		for (auto chunk_view : view::iota(0, (int)quads.size()) | view::chunk(chunk_size) | view::drop(thread_id) | view::take(1))
+
 		{
-			for (uint qid : chunk_view)
+			MeasureTime mt("transform quads", thread_id, nthreads);
+			thread_data[thread_id].valid_qids.clear();
+			thread_data[thread_id].splinters.clear();
+			for (auto chunk_view : view::iota(0, (int)quads.size()) | view::chunk(chunk_size) | view::drop(thread_id) | view::take(1))
 			{
-				auto& quad = quads[qid];
-				
-				Quad split_quad;
-				auto transform_result = TransformQuad(quad, view_proj, split_quad);
-				if (transform_result != TransformResult::Discard)
+				for (uint qid : chunk_view)
 				{
-					PerspectiveTransformQuad(quad);
-					thread_data[thread_id].valid_qids.push_back(qid);
-					if (transform_result == TransformResult::Split)
+					auto& quad = quads[qid];
+					
+					Quad split_quad;
+					auto transform_result = TransformQuad(quad, view_proj, split_quad);
+					if (transform_result != TransformResult::Discard)
 					{
-						PerspectiveTransformQuad(split_quad);
-						thread_data[thread_id].splinters.push_back(split_quad);
+						PerspectiveTransformQuad(quad);
+						if (quad.GetNormal().z < 0.0f)
+						{
+							thread_data[thread_id].valid_qids.push_back(qid);
+							if (transform_result == TransformResult::Split)
+							{
+								PerspectiveTransformQuad(split_quad);
+								thread_data[thread_id].splinters.push_back(split_quad);
+							}
+						}
 					}
 				}
 			}
@@ -571,10 +634,13 @@ int main()
 
 		collect_quads_barrier.arrive_and_wait();
 
-		for (uint qid : valid_qids)
-			RasterizeQuad(quads[qid], frame_ms, depth, {thread_id, nthreads});
-		for (Quad& quad : splinters)
-			RasterizeQuad(quad, frame_ms, depth, {thread_id, nthreads});
+		{
+			MeasureTime mt("rasterize quads", thread_id, nthreads);
+			for (uint qid : valid_qids)
+				RasterizeQuad(quads[qid], frame_ms, depth, {thread_id, nthreads});
+			for (Quad& quad : splinters)
+				RasterizeQuad(quad, frame_ms, depth, {thread_id, nthreads});
+		}
 
 		copy_image_barrier.arrive_and_wait();
 	});
