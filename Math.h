@@ -5,8 +5,6 @@
 #include <algorithm>
 #include <format>
 
-#include "Common.h"
-
 struct i2
 {
 	int x;
@@ -18,6 +16,7 @@ struct i2
 
 	constexpr i2 operator * (int i) const { return i2{ x * i, y * i }; }
 	constexpr i2 operator + (i2 other) const { return i2{ x + other.x, y + other.y }; }
+	constexpr i2 operator / (int i) const { return i2{ x / i, y / i }; }
 };
 
 struct v4

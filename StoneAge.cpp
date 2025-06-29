@@ -1,12 +1,21 @@
-#include <iostream>
-#include <thread>
-#include <chrono>
-
 #include <assert.h>
 #include <math.h>
 #include <string.h>
 
-#include "Common.h"
+#include <algorithm>
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <thread>
+#include <barrier>
+#include <vector>
+#include <ranges>
+#include <numeric>
+
+using uchar = unsigned char;
+using uint = unsigned int;
+namespace view = std::ranges::views;
+
 #include "Math.h"
 #include "GameWindow.h"
 
@@ -248,6 +257,7 @@ enum class TransformResult
 
 TransformResult TransformQuad(Quad& q, const Mtx& view_proj, Quad& split_quad)
 {
+	q = view_proj * q;
 	if (q.verts[0].z < 0.0f &&
 			q.verts[1].z < 0.0f &&
 			q.verts[2].z < 0.0f &&
@@ -305,6 +315,7 @@ TransformResult TransformQuad(Quad& q, const Mtx& view_proj, Quad& split_quad)
 			}
 		}
 	}
+	
 	return TransformResult::Ok;
 }
 
@@ -322,16 +333,18 @@ void PerspectiveTransformQuad(Quad& q)
 	q = to_screen_ctr * q;
 }
 
-void RasterizeQuad(Quad& q, auto& frame, auto& depth)
+void RasterizeQuad(Quad& q, auto& frame, auto& depth, i2 tiles)
 {
 	v4 normal = q.GetNormal();
 	if (normal.z >= 0.0f)
 		return;
 
+	int tile = tiles.x;
+	int num_tiles = tiles.y;
 	i2 top_left = Floor_i2(q.GetMin() * frame.GetSize());
 	i2 bottom_right = Ceil_i2(q.GetMax() * frame.GetSize());
-	top_left = Clamp(top_left, {0, 0}, frame.GetSize());
-	bottom_right = Clamp(bottom_right, {0, 0}, frame.GetSize());
+	top_left = Clamp(top_left, (frame.GetSize() * tile) / num_tiles, (frame.GetSize() * (tile+1)) / num_tiles);
+	bottom_right = Clamp(bottom_right, (frame.GetSize() * tile) / num_tiles, (frame.GetSize() * (tile+1)) / num_tiles);
 	v4 frame_size_inv{1.0f / frame.GetSize().x, 1.0f / frame.GetSize().y};
 	for (int y = top_left.y; y < bottom_right.y; ++y)
 		for (int x = top_left.x; x < bottom_right.x; ++x)
@@ -388,6 +401,43 @@ struct PerfTracker
 	float last = 0.0f;
 };
 
+struct Jobs
+{
+	Jobs()
+		//: size(std::thread::hardware_concurrency())
+		: size(1)
+	{}
+
+	template<typename ParallelFunc>
+	void Run(const ParallelFunc& parallel_func, std::vector<Quad>* address, std::vector<uint>* address2)
+	{
+		threads.reserve(size);
+		
+		for (int i = 0; i < size; ++i)
+			threads.emplace_back([i, this, &parallel_func, address, address2]() { while (!done.test()) parallel_func(i, address, address2); } );
+	}
+
+	template<typename OnEndFunc>
+	void End(OnEndFunc&& on_end_func)
+	{
+		LOG("done = true");
+		done.test_and_set();
+		on_end_func();
+	}
+
+	~Jobs()
+	{
+		for (auto& thread : threads)
+			thread.join();
+	}
+
+	int GetSize() const { return size; }
+
+	int size = 0;
+	std::vector<std::thread> threads;
+	std::atomic_flag done;
+};
+
 int main()
 {
 	Image<b4, {1024, 1024}> frame;
@@ -415,59 +465,154 @@ int main()
 	PerfTracker<5> perf;
 
 	Camera camera;
+	
 	std::vector<Quad> quads;
+	LOG("sizeof(vec) = {} pquads = {}", sizeof(quads), (uint64_t)&quads);
+	std::vector<uint> valid_qids;
+	std::vector<Quad> splinters;
+	struct ThreadData
+	{
+		std::vector<uint> valid_qids;
+		std::vector<Quad> splinters;
+	};
+	std::vector<ThreadData> thread_data;
 
-	auto&& frame_fn =
-		[&]
-		()
+	Mtx projection 
+	{
+		{1.0f, 0.0f, 0.0f, 0.0f},
+		{0.0f, -1.0f, 0.0f, 0.0f},
+		{0.0f, 0.0f, Far / (Far - Near), -Far * Near / (Far - Near)},
+		{0.0f, 0.0f, 1.0f, 0.0f} 
+	};
+	Mtx view_proj;
+
+	uint qsize = 0;
+
+	Jobs jobs;
+	std::barrier frame_start_barrier(jobs.GetSize() + 1, [&]()
+	{
+		if (jobs.done.test())
 		{
-			auto now = std::chrono::steady_clock::now();
-			std::chrono::duration<float> dt_dur = now - frame_start;
-			frame_start = now;
-			float dt = dt_dur.count();
+			LOG("jobs done")
+			return;
+		}
+		LOG("frame start");
+		auto now = std::chrono::steady_clock::now();
+		std::chrono::duration<float> dt_dur = now - frame_start;
+		frame_start = now;
+		float dt = dt_dur.count();
 
-			perf.Update(dt);
+		perf.Update(dt);
 
-			input.Update(dt);
-			camera.Update(input, dt);
-			
-			GenerateScene(quads, dt);
-			
-			Mtx view = camera.GetViewMatrix();
-			
-			Mtx projection 
+		input.Update(dt);
+		camera.Update(input, dt);
+		
+		//GenerateScene(quads, dt);
+		qsize = quads.size();
+		LOG("quads = {}", quads.size());
+		
+		view_proj = projection * camera.GetViewMatrix(); 
+		frame.Clear();
+		frame_ms.Clear();
+		depth.Clear(v4{Far});
+		LOG("frame continue");
+	});
+	LOG("&fsbarrier = {}", (uint64_t)&frame_start_barrier);
+
+	std::barrier collect_quads_barrier(jobs.GetSize() + 1, [&]()
+	{
+		LOG("collect quads");
+		uint n_vq = std::accumulate(thread_data.begin(), thread_data.end(), 0u, [](uint v, auto& s) {return v + s.valid_qids.size();});
+		uint n_s = std::accumulate(thread_data.begin(), thread_data.end(), 0u, [](uint v, auto& s) {return v + s.splinters.size();});
+		valid_qids.resize(n_vq);
+		splinters.resize(n_s);
+		for (auto& td : thread_data)
+		{
+			valid_qids.insert(valid_qids.end(), td.valid_qids.begin(), td.valid_qids.end());
+			splinters.insert(splinters.end(), td.splinters.begin(), td.splinters.end());
+		}
+		LOG("/collect quads");
+	});
+
+	std::barrier copy_image_barrier(jobs.GetSize() + 1, [&]()
+	{
+		LOG("copy image");
+		frame.CopyFrom(frame_ms, 
+		[](const std::array<v4, 4>& pix) 
+		{return b4((pix[0] + pix[1] + pix[2] + pix[3]) * (255.0f / 4.0f));});
+		LOG("/copy image");
+	});
+
+	LOG("before Run: Jobs.GetSize() = {}", jobs.GetSize());
+	jobs.Run([&](int thread_id, std::vector<Quad>* address, std::vector<uint>* address2)
+	{
+		LOG("--- &quads = {} pquads = {} &qids = {} pqids = {}", (uint64_t)&quads, (uint64_t)address, (uint64_t)&valid_qids, (uint64_t)address2);
+		LOG("&barier = {}", reinterpret_cast<uint64_t>(&frame_start_barrier));
+		LOG("worker arrives at barrier fs");
+		frame_start_barrier.arrive_and_wait();
+		if (jobs.done.test())
+			return;
+
+		LOG("parallel start");
+		LOG("&quads = {} pquads = {} &qids = {} pqids = {}", (uint64_t)&quads, (uint64_t)address, (uint64_t)&valid_qids, (uint64_t)address2);
+		LOG("frame.size.x = {}", frame.GetSize().x);
+		LOG("jobs.GetSize() = {}", jobs.GetSize());
+		LOG("proj[1][1] = {}", projection.lines[1][1]);
+
+		int nthreads = jobs.GetSize();
+		int chunk_size = (quads.size() + nthreads - 1) / nthreads;
+		LOG("nquads = {} {} nthreads = {} chunk_size = {}", quads.size(), qsize, nthreads, chunk_size);
+		
+		for (auto chunk_view : view::iota(0, (int)quads.size()) | view::chunk(chunk_size) | view::drop(thread_id) | view::take(1))
+		{
+			for (uint qid : chunk_view)
 			{
-				{1.0f, 0.0f, 0.0f, 0.0f},
-				{0.0f, -1.0f, 0.0f, 0.0f},
-				{0.0f, 0.0f, Far / (Far - Near), -Far * Near / (Far - Near)},
-				{0.0f, 0.0f, 1.0f, 0.0f} 
-			};
-			Mtx view_proj = projection * view; 
-			frame.Clear();
-			frame_ms.Clear();
-			depth.Clear(v4{Far});
-			for (Quad q : quads)
-			{
+				LOG("{}", qid);
+				auto& quad = quads[qid];
+				//quad = view_proj * quad;
+				
 				Quad split_quad;
-				q = view_proj * q;
-				auto transform_result = TransformQuad(q, view_proj, split_quad);
+				LOG("?");
+				auto transform_result = TransformQuad(quad, view_proj, split_quad);
 				if (transform_result != TransformResult::Discard)
 				{
-					PerspectiveTransformQuad(q);
-					RasterizeQuad(q, frame_ms, depth);
+					PerspectiveTransformQuad(quad);
+					thread_data[thread_id].valid_qids.push_back(qid);
 					if (transform_result == TransformResult::Split)
 					{
 						PerspectiveTransformQuad(split_quad);
-						RasterizeQuad(split_quad, frame_ms, depth);
+						thread_data[thread_id].splinters.push_back(split_quad);
 					}
 				}
 			}
-			frame.CopyFrom(frame_ms, 
-					[](const std::array<v4, 4>& pix) 
-					{return b4((pix[0] + pix[1] + pix[2] + pix[3]) * (255.0f / 4.0f));});
-		};
+		}
+
+		LOG("worker arrives at barrier cq");
+		collect_quads_barrier.arrive_and_wait();
+
+		if (thread_id % 2)
+		{
+		for (uint qid : valid_qids)
+			RasterizeQuad(quads[qid], frame_ms, depth, {thread_id, nthreads});
+		for (Quad& quad : splinters)
+			RasterizeQuad(quad, frame_ms, depth, {thread_id, nthreads});
+		}
+		copy_image_barrier.arrive_and_wait();
+	}, &quads, &valid_qids);
+
+	auto&& frame_fn = [&]()
+	{
+		LOG("main arrives at barrier fs");
+		frame_start_barrier.arrive_and_wait();
+		LOG("main arrives at barrier cq");
+		collect_quads_barrier.arrive_and_wait();
+		LOG("main arrives at barrier ci");
+		copy_image_barrier.arrive_and_wait();
+	};
 	
 	window.Run(frame_fn, key_fn);
+	jobs.End([&]() { frame_start_barrier.arrive_and_wait(); });
 	
 	return 0;
 }
+
