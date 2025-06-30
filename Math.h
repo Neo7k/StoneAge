@@ -132,6 +132,12 @@ b4 Clamp(b4 v, uchar min, uchar max)
 	return {std::clamp(v.x, min, max), std::clamp(v.y, min, max), std::clamp(v.z, min, max), std::clamp(v.w, min, max)};
 }
 
+template<typename T>
+T DivCeil(T arg1, T arg2)
+{
+	return (arg1 + arg2 - 1) / arg2;
+}
+
 struct Mtx
 {
 	Mtx() = default;

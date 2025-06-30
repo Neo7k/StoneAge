@@ -53,7 +53,22 @@ struct Image
 
 	constexpr i2 GetSize() const { return size; }
 	void Clear() { memset(pix, 0, size.x * size.y * sizeof(T)); }
+	void Clear(uint thread_id, uint thread_num) 
+	{ 
+		uint num_pix = size.x * size.y;
+		uint chunk_size = DivCeil(num_pix, thread_num);
+		chunk_size = std::min(chunk_size, num_pix - chunk_size * thread_id);
+		memset(pix + chunk_size * thread_id, 0, chunk_size * sizeof(T)); 
+	}
 	void Clear(T value) { for (int i = 0; i < size.x * size.y; ++i) pix[i] = value; }
+	void Clear(T value, uint thread_id, uint thread_num) 
+	{ 
+		uint num_pix = size.x * size.y;
+		int chunk_size = (num_pix + thread_num - 1) / thread_num;
+		for (auto chunk_view : view::iota(0u, num_pix) | view::chunk(chunk_size) | view::drop(thread_id) | view::take(1))
+			for (uint i : chunk_view)
+				pix[i] = value; 
+	}
 	void Set(i2 coords, T color) { pix[coords.y * size.x + coords.x] = color; }
 	void Add(i2 coords, T color) { pix[coords.y * size.x + coords.x] += color; }
 	T Get(i2 coords) const { return pix[coords.y * size.x + coords.x]; }
@@ -62,6 +77,15 @@ struct Image
 	void CopyFrom(auto& image, CopyFunc&& copy_fn)
 	{
 		for (int i = 0; i < size.x * size.y; ++i)
+				pix[i] = copy_fn(image.pix[i]);
+	}
+	template<typename CopyFunc>
+	void CopyFrom(auto& image, CopyFunc&& copy_fn, int thread_id, int thread_num)
+	{
+		uint num_pix = size.x * size.y;
+		int chunk_size = (num_pix + thread_num - 1) / thread_num;
+		for (auto chunk_view : view::iota(0u, num_pix) | view::chunk(chunk_size) | view::drop(thread_id) | view::take(1))
+			for (uint i : chunk_view)
 				pix[i] = copy_fn(image.pix[i]);
 	}
 
@@ -191,75 +215,40 @@ struct Camera
 	float rotation_speed = 1.15f;
 };
 
-void GenerateScene(std::vector<Quad>& quads, float dt)
+struct Model
+{
+	Model(const char* filename)
+	{
+		std::default_random_engine reng;
+		std::uniform_real_distribution<float> d(0.3f, 1.0f);
+		std::ifstream f(filename);
+		while (f)
+		{
+			v4 verts[4] = { {1.0f}, {1.0f}, {1.0f}, {1.0f} };
+			for (int i = 0; i < 4; ++i)
+				f >> verts[i].x >> verts[i].y >> verts[i].z;
+			std::string s;
+			std::getline(f, s);
+			
+			Quad q
+			{
+				verts[0], verts[1], verts[2], verts[3],
+				v4{d(reng), d(reng), d(reng) / 10.0f, 1.0f}
+			};
+
+			quads.push_back(q);
+		}
+	}
+
+	std::vector<Quad> quads;
+};
+
+void GenerateStaticScene(std::vector<Quad>& quads, Model& cactus)
 {
 	quads.clear();
 
-	/*constexpr int num_columns = 16;
-	for (int i = 0; i < num_columns; ++i)
-	for (int j = 0; j < num_columns; ++j)
-	{
-		float angle = t + i + j * 0.5;
-		Mtx mtx
-		{
-			v4{cosf(angle), 0.0f, -sinf(angle), float(j - num_columns / 2)},
-			v4{0.0f, 1.0f, 0.0f, 0.0f},
-			v4{sinf(angle), 0.0f, cosf(angle), float(i - num_columns / 2)},
-		};
-		quads.emplace_back(mtx*Quad
-		{ 
-			v4{-0.15f, 0.5f, 0.15f},
-			v4{-0.15f, -0.5f, 0.15f},
-			v4{-0.15f, -0.5f, -0.15f},
-			v4{-0.15f, 0.5f, -0.15f},
-			v4{0.0f, 0.0f, 1.0f}
-		});
-		quads.emplace_back(mtx*Quad
-		{ 
-			v4{0.15f, 0.5f, -0.15f},
-			v4{0.15f, -0.5f, -0.15f},
-			v4{0.15f, -0.5f, 0.15f},
-			v4{0.15f, 0.5f, 0.15f},
-			v4{0.0f, 1.0f, 0.0f}
-		});
-		quads.emplace_back(mtx*Quad
-		{ 
-			v4{-0.15f, 0.5f, -0.15f},
-			v4{-0.15f, -0.5f, -0.15f},
-			v4{0.15f, -0.5f, -0.15f},
-			v4{0.15f, 0.5f, -0.15f},
-			v4{1.0f, 1.0f, 0.0f}
-		});
-		quads.emplace_back(mtx*Quad
-		{ 
-			v4{0.15f, 0.5f, 0.15f},
-			v4{0.15f, -0.5f, 0.15f},
-			v4{-0.15f, -0.5f, 0.15f},
-			v4{-0.15f, 0.5f, 0.15f},
-			v4{1.0f, 0.0f, 0.0f}
-		});
-	}*/
-	std::default_random_engine reng;
-	std::uniform_real_distribution<float> d(0.3f, 1.0f);
-	std::ifstream f("dino.qobj");
-	while (f)
-	{
-		v4 verts[4] = { {1.0f}, {1.0f}, {1.0f}, {1.0f} };
-		for (int i = 0; i < 4; ++i)
-			f >> verts[i].x >> verts[i].y >> verts[i].z;
-		std::string s;
-		std::getline(f, s);
-		
-		Quad q
-		{
-			verts[0], verts[1], verts[2], verts[3],
-			v4{d(reng), d(reng), d(reng) / 10.0f, 1.0f}
-		};
-
-		q.color = q.color * std::clamp(q.GetNormal().Normalized().Dot(v4{0.5f, 0.5f, 0.5f, 0.0f}), 0.5f, 1.0f);
-		quads.push_back(q);
-	}
-
+	quads.insert(quads.end(), cactus.quads.begin(), cactus.quads.end());
+	// Floor
 	quads.emplace_back(Quad
 	{
 		v4{-5.0f, 0.0f, 5.0f},
@@ -269,7 +258,6 @@ void GenerateScene(std::vector<Quad>& quads, float dt)
 		v4{0.5f, 0.5f, 0.5f}
 	});
 }
-
 
 enum class TransformResult
 {
@@ -576,6 +564,10 @@ int main()
 	};
 	Mtx view_proj;
 
+	Model cactus("cactus.qobj");
+	std::vector<Quad> static_scene;
+	GenerateStaticScene(static_scene, cactus);
+
 	std::barrier frame_start_barrier(jobs.GetSize() + 1, [&]()
 	{
 		if (jobs.done.test())
@@ -592,13 +584,10 @@ int main()
 		input.Update(dt);
 		ltf = input.ConsumeKey(24);
 		camera.Update(input, dt);
-		
-		GenerateScene(quads, dt);
+		quads.clear();
+		quads.insert(quads.end(), static_scene.begin(), static_scene.end());
 		
 		view_proj = projection * camera.GetViewMatrix(); 
-		frame.Clear();
-		frame_ms.Clear({ v4{0.0f, 0.63f, 0.9f}, v4{0.0f, 0.63f, 0.9f}, v4{0.0f, 0.63f, 0.9f}, v4{0.0f, 0.63f, 0.9f} });
-		depth.Clear(v4{Far});
 	});
 
 	std::barrier collect_quads_barrier(jobs.GetSize() + 1, [&]()
@@ -617,13 +606,8 @@ int main()
 		}
 	});
 
-	std::barrier copy_image_barrier(jobs.GetSize() + 1, [&]()
-	{
-		MeasureTime mt("copy image");
-		frame.CopyFrom(frame_ms, 
-		[](const std::array<v4, 4>& pix) 
-		{return b4((pix[0] + pix[1] + pix[2] + pix[3]) * (255.0f / 4.0f));});
-	});
+	std::barrier copy_image_barrier(jobs.GetSize() + 1);
+	std::barrier end_frame_barrier(jobs.GetSize() + 1);
 
 	jobs.Run([&](int thread_id)
 	{
@@ -633,6 +617,14 @@ int main()
 
 		int nthreads = jobs.GetSize();
 		int chunk_size = (quads.size() + nthreads - 1) / nthreads;
+
+		// Can do without barriers here because the code below (until the nearest barrier) doesn't touch this data
+		{
+			frame.Clear(thread_id, nthreads);
+			const v4 sky_blue = v4{0.0f, 0.63f, 0.9f};
+			frame_ms.Clear({sky_blue, sky_blue, sky_blue, sky_blue}, thread_id, nthreads);
+			depth.Clear(v4{Far}, thread_id, nthreads);
+		}
 
 		{
 			MeasureTime mt("transform quads", thread_id, nthreads);
@@ -674,6 +666,15 @@ int main()
 		}
 
 		copy_image_barrier.arrive_and_wait();
+		{
+			MeasureTime mt("copy image", thread_id, nthreads);
+			frame.CopyFrom(frame_ms, 
+			[](const std::array<v4, 4>& pix) 
+			{return b4((pix[0] + pix[1] + pix[2] + pix[3]) * (255.0f / 4.0f));},
+			thread_id, nthreads);
+		}
+
+		end_frame_barrier.arrive_and_wait();
 	});
 
 
@@ -683,6 +684,7 @@ int main()
 		frame_start_barrier.arrive_and_wait();
 		collect_quads_barrier.arrive_and_wait();
 		copy_image_barrier.arrive_and_wait();
+		end_frame_barrier.arrive_and_wait();
 	};
 	
 	window.Run(frame_fn, key_fn);
