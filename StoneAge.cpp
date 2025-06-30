@@ -11,6 +11,8 @@
 #include <vector>
 #include <ranges>
 #include <numeric>
+#include <fstream>
+#include <random>
 
 using uchar = unsigned char;
 using uint = unsigned int;
@@ -182,7 +184,7 @@ struct Camera
 			};
 	}
 
-	v4 pos = v4::Zero();
+	v4 pos = v4{0.0f, 1.0f, 0.0f, 1.0f};
 	float angle = 0.0f;
 
 	float speed = 1.0f;
@@ -191,11 +193,9 @@ struct Camera
 
 void GenerateScene(std::vector<Quad>& quads, float dt)
 {
-	static float t = 0.0f;
-	t += dt;
 	quads.clear();
 
-	constexpr int num_columns = 16;
+	/*constexpr int num_columns = 16;
 	for (int i = 0; i < num_columns; ++i)
 	for (int j = 0; j < num_columns; ++j)
 	{
@@ -238,13 +238,34 @@ void GenerateScene(std::vector<Quad>& quads, float dt)
 			v4{-0.15f, 0.5f, 0.15f},
 			v4{1.0f, 0.0f, 0.0f}
 		});
+	}*/
+	std::default_random_engine reng;
+	std::uniform_real_distribution<float> d(0.3f, 1.0f);
+	std::ifstream f("dino.qobj");
+	while (f)
+	{
+		v4 verts[4] = { {1.0f}, {1.0f}, {1.0f}, {1.0f} };
+		for (int i = 0; i < 4; ++i)
+			f >> verts[i].x >> verts[i].y >> verts[i].z;
+		std::string s;
+		std::getline(f, s);
+		
+		Quad q
+		{
+			verts[0], verts[1], verts[2], verts[3],
+			v4{d(reng), d(reng), d(reng) / 10.0f, 1.0f}
+		};
+
+		q.color = q.color * std::clamp(q.GetNormal().Normalized().Dot(v4{0.5f, 0.5f, 0.5f, 0.0f}), 0.5f, 1.0f);
+		quads.push_back(q);
 	}
+
 	quads.emplace_back(Quad
 	{
-		v4{-5.0f, -0.5f, 5.0f},
-		v4{-5.0f, -0.5f, -5.0f},
-		v4{5.0f, -0.5f, -5.0f},
-		v4{5.0f, -0.5f, 5.0f},
+		v4{-5.0f, 0.0f, 5.0f},
+		v4{-5.0f, 0.0f, -5.0f},
+		v4{5.0f, 0.0f, -5.0f},
+		v4{5.0f, 0.0f, 5.0f},
 		v4{0.5f, 0.5f, 0.5f}
 	});
 }
@@ -293,9 +314,11 @@ TransformResult TransformQuad(Quad& q, const Mtx& view_proj, Quad& split_quad)
 			if (num == 0)
 			{
 				auto cross = f(vert, others[2]);
-				assert(cross);
+				//assert(cross);
 				if (cross)
 					vert = cross.value();
+				else
+					return TransformResult::Discard;
 			}
 			if (num == 1)
 			{
@@ -305,7 +328,7 @@ TransformResult TransformQuad(Quad& q, const Mtx& view_proj, Quad& split_quad)
 			{
 				split_quad = qcopy;
 				auto middle = f(vert, others[2]);
-				assert(middle);
+				//assert(middle);
 				if (!middle)
 					return TransformResult::Discard;
 
@@ -366,7 +389,7 @@ void RasterizeQuad(Quad& q, auto& frame, auto& depth, i2 tiles)
 										q.GetEdgeValue(p, 1),
 										q.GetEdgeValue(p, 2),
 										q.GetEdgeValue(p, 3)};
-				if (e[0] > 0 && e[1] > 0 && e[2] > 0 && e[3] > 0)
+				if (e[0] >= 0.0f && e[1] >= 0.0f && e[2] >= 0.0f && e[3] >= 0.0f)
 				{
 					float pixel_depth = (q.verts[0].Dot(normal) - p.Dot(normal)) / normal.z;
 					if (pixel_depth < frame_depth[i])
@@ -374,6 +397,16 @@ void RasterizeQuad(Quad& q, auto& frame, auto& depth, i2 tiles)
 						pixel_color[i] = q.color;
 						frame_depth[i] = pixel_depth;
 					}
+				}
+				if (e[0] <= 0.0f && e[1] <= 0.0f && e[2] <= 0.0f && e[3] < 0.0f)
+				{
+					float pixel_depth = (q.verts[0].Dot(normal) - p.Dot(normal)) / normal.z;
+					if (pixel_depth < frame_depth[i])
+					{
+						pixel_color[i] = v4(1.0f, 0.0f, 1.0f);//q.color;
+						frame_depth[i] = pixel_depth;
+					}
+
 				}
 			}
 		}
@@ -471,7 +504,7 @@ struct Jobs
 		threads.reserve(size);
 		
 		for (int i = 0; i < size; ++i)
-			threads.emplace_back([i, this, &parallel_func]() { while (!done.test()) parallel_func(i); } );
+			threads.emplace_back([i, this, parallel_func]() { while (!done.test()) parallel_func(i); } );
 	}
 
 	template<typename OnEndFunc>
@@ -564,7 +597,7 @@ int main()
 		
 		view_proj = projection * camera.GetViewMatrix(); 
 		frame.Clear();
-		frame_ms.Clear();
+		frame_ms.Clear({ v4{0.0f, 0.63f, 0.9f}, v4{0.0f, 0.63f, 0.9f}, v4{0.0f, 0.63f, 0.9f}, v4{0.0f, 0.63f, 0.9f} });
 		depth.Clear(v4{Far});
 	});
 
@@ -592,9 +625,7 @@ int main()
 		{return b4((pix[0] + pix[1] + pix[2] + pix[3]) * (255.0f / 4.0f));});
 	});
 
-	jobs.Run([&frame_start_barrier, &collect_quads_barrier, &copy_image_barrier, 
-			&jobs, &quads, &view_proj, &thread_data,
-			&valid_qids, &splinters, &frame_ms, &depth](int thread_id)
+	jobs.Run([&](int thread_id)
 	{
 		frame_start_barrier.arrive_and_wait();
 		if (jobs.done.test())
@@ -615,18 +646,18 @@ int main()
 					
 					Quad split_quad;
 					auto transform_result = TransformQuad(quad, view_proj, split_quad);
-					if (transform_result != TransformResult::Discard)
+					if (transform_result == TransformResult::Discard)
+						continue;
+
+					PerspectiveTransformQuad(quad);
+					if (quad.GetNormal().z > 0.0f)
+						continue;
+
+					thread_data[thread_id].valid_qids.push_back(qid);
+					if (transform_result == TransformResult::Split)
 					{
-						PerspectiveTransformQuad(quad);
-						if (quad.GetNormal().z < 0.0f)
-						{
-							thread_data[thread_id].valid_qids.push_back(qid);
-							if (transform_result == TransformResult::Split)
-							{
-								PerspectiveTransformQuad(split_quad);
-								thread_data[thread_id].splinters.push_back(split_quad);
-							}
-						}
+						PerspectiveTransformQuad(split_quad);
+						thread_data[thread_id].splinters.push_back(split_quad);
 					}
 				}
 			}
@@ -645,8 +676,10 @@ int main()
 		copy_image_barrier.arrive_and_wait();
 	});
 
+
 	auto&& frame_fn = [&]()
 	{
+		MeasureTime mt("total frame");
 		frame_start_barrier.arrive_and_wait();
 		collect_quads_barrier.arrive_and_wait();
 		copy_image_barrier.arrive_and_wait();
