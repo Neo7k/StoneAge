@@ -222,39 +222,85 @@ struct Model
 		std::default_random_engine reng;
 		std::uniform_real_distribution<float> d(0.3f, 1.0f);
 		std::ifstream f(filename);
+		v4 verts[4] = { {1.0f}, {1.0f}, {1.0f}, {1.0f} };
+		v4 color = {1.0f};
 		while (f)
 		{
-			v4 verts[4] = { {1.0f}, {1.0f}, {1.0f}, {1.0f} };
 			for (int i = 0; i < 4; ++i)
 				f >> verts[i].x >> verts[i].y >> verts[i].z;
+			f >> color.x >> color.y >> color.z;
+
 			std::string s;
 			std::getline(f, s);
-			
+
 			Quad q
 			{
 				verts[0], verts[1], verts[2], verts[3],
-				v4{d(reng), d(reng), d(reng) / 10.0f, 1.0f}
+				color
 			};
 
 			quads.push_back(q);
 		}
 	}
 
+	Model& Transform(const Mtx& mtx)
+	{
+		for (auto& q : quads)
+			q = mtx * q;
+		return *this;
+	}
+
+	Model& Light(v4 light_dir)
+	{
+		for (auto& q : quads)
+			q.color = q.color * std::max(q.GetNormal().Normalized().Dot(light_dir), 0.3f);
+		return *this;
+	}
+
+	void CopyTo(std::vector<Quad>& in_quads) const
+	{
+		in_quads.insert(in_quads.end(), quads.begin(), quads.end());
+	}
+
 	std::vector<Quad> quads;
 };
 
-void GenerateStaticScene(std::vector<Quad>& quads, Model& cactus)
+void GenerateStaticScene(std::vector<Quad>& quads, const Model& cactus)
 {
 	quads.clear();
 
-	quads.insert(quads.end(), cactus.quads.begin(), cactus.quads.end());
+	constexpr int map_sz = 40;
+	constexpr int map_sz2 = map_sz / 2;
+	constexpr float map_sz2f = (float)map_sz2;
+	constexpr int num_cactuses = 50;
+
+	std::default_random_engine reng(2);
+	bool objs[map_sz][map_sz];
+	memset(objs, 0, sizeof(objs));
+	std::uniform_int_distribution<int> cpick(-map_sz2 + 1, map_sz2 - 1);
+	std::uniform_real_distribution<float> rpick(0.0f, M_PI * 2.0f);
+	for (int i = 0; i < num_cactuses; ++i)
+	{
+		int j = 0;
+		while (j++ < map_sz * map_sz)
+		{
+			i2 coords{cpick(reng), cpick(reng)};
+			i2 pos_coords = coords + i2{map_sz2, map_sz2};
+			if (objs[pos_coords.x][pos_coords.y])
+				continue;
+
+			objs[pos_coords.x][pos_coords.y] = true;
+			Model(cactus).Transform(Mtx::Translate({(float)coords.x, 0.0f, (float)coords.y}) * Mtx::RotateY(rpick(reng)) * Mtx::Scale(0.5f)).Light({0.5f, -0.5f, 0.5f}).CopyTo(quads);
+			break;
+		}
+	}
 	// Floor
 	quads.emplace_back(Quad
 	{
-		v4{-5.0f, 0.0f, 5.0f},
-		v4{-5.0f, 0.0f, -5.0f},
-		v4{5.0f, 0.0f, -5.0f},
-		v4{5.0f, 0.0f, 5.0f},
+		v4{-map_sz2f, 0.0f, map_sz2f},
+		v4{-map_sz2f, 0.0f, -map_sz2f},
+		v4{map_sz2f, 0.0f, -map_sz2f},
+		v4{map_sz2f, 0.0f, map_sz2f},
 		v4{0.5f, 0.5f, 0.5f}
 	});
 }

@@ -163,6 +163,40 @@ struct Mtx
 		lines[3] = l4;
 	}
 
+	static Mtx RotateY(float angle)
+	{
+		return
+		{
+			{cosf(angle), 0.0f, -sinf(angle), 0.0f},
+			{0.0f, 1.0f, 0.0f, 0.0f},
+			{sin(angle), 0.0f, cos(angle), 0.0f},
+			{0.0f, 0.0f, 0.0f, 1.0f}
+		};
+	}
+	
+	static Mtx Translate(v4 v)
+	{
+		return
+		{
+			{1.0f, 0.0f, 0.0f, v.x},
+			{0.0f, 1.0f, 0.0f, v.y},
+			{0.0f, 0.0f, 1.0f, v.z},
+			{0.0f, 0.0f, 0.0f, 1.0f}
+		};
+	}
+
+	static Mtx Scale(float s)
+	{
+		return
+		{
+			{s, 0.0f, 0.0f, 0.0f},
+			{0.0f, s, 0.0f, 0.0f},
+			{0.0f, 0.0f, s, 0.0f},
+			{0.0f, 0.0f, 0.0f, 1.0f}
+		};
+	}
+
+
 	v4 operator * (v4 v) const
 	{
 		return v4{lines[0].Dot(v),
