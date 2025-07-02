@@ -165,12 +165,19 @@ struct Quad
 
 struct Input 
 {
-	Input() { memset(keys, 0, sizeof(keys)); memset(keys_time, 0, sizeof(keys_time)); memset(keys_has_been_pressed, 0, sizeof(keys_has_been_pressed)); }
+	Input() { memset(keys, 0, sizeof(keys)); memset(keys_time, 0, sizeof(keys_time)); memset(keys_has_been_pressed, 0, sizeof(keys_has_been_pressed)); memset(keys_up, 0, sizeof(keys_up)); }
 	void Update(float dt) 
 	{
 		for (int i = 0; i < 256; ++i)
 			if (keys[i])
 				keys_time[i] += dt;
+	}
+	void EndFrame()
+	{
+		for (int i = 0; i < 256; ++i)
+			if (keys_up[i])
+				keys_time[i] = 0.0f;
+		memset(keys_up, 0, sizeof(keys_up));
 	}
 	bool ConsumeKey(int key)
 	{
@@ -183,6 +190,7 @@ struct Input
 	}
 	bool keys[256];
 	uchar keys_has_been_pressed[256];
+	bool keys_up[256];
 	float keys_time[256];
 };
 
@@ -329,10 +337,43 @@ struct MapT : public Map
 	Cell map[size][size];
 };
 
+struct Box
+{
+	Box() = default;
+	Box(float w, float h, float d)
+	{
+		float hw = w / 2.0f; float hh = h / 2.0f; float hd = d / 2.0f;
+		quads[0] = Quad{{-hw,-hh,hd},{-hw,-hh,-hd},{-hw,hh,-hd},{-hw,hh,hd}};
+		quads[1] = Quad{{hw,-hh,hd},{hw,hh,hd},{hw,hh,-hd},{hw,-hh,-hd}};
+		quads[2] = Quad{{-hw,-hh,-hd},{hw,-hh,-hd},{hw,hh,-hd},{-hw,hh,-hd}};
+		quads[3] = Quad{{-hw,-hh,hd},{-hw,hh,hd},{hw,hh,hd},{hw,-hh,hd}};
+		quads[4] = Quad{{-hw,hh,-hd},{hw,hh,-hd},{hw,hh,hd},{-hw,hh,hd}};
+		quads[5] = Quad{{-hw,-hh,-hd},{-hw,-hh,hd},{hw,-hh,hd},{hw,-hh,-hd}};
+	}
+
+	void Transform(const Mtx& mtx)
+	{
+		for (Quad& q : quads)
+			q = mtx * q;
+	}
+
+	bool Contains(v4 p) const
+	{
+		for (const Quad& q : quads)
+			if (q.GetNormal().Dot(p - q.verts[0]) < 0.0f)
+				return false;
+
+		return true;
+	}
+
+	Quad quads[6];
+};
+
 struct Dino
 {
 	Dino(const Model& in_model_wl, const Model& in_model_wr, Rng& in_rng, const auto& in_map)
 		: models{in_model_wl, in_model_wr}, rng(in_rng), map(&in_map)
+		, bbox{{1.5f, 0.85f, 0.5f},{1.0f, 1.0f, 0.5f}}
 	{
 		v4 min{0.3f, 0.5f, 0.0f}, max{0.9f, 0.9f, 0.1f};
 		auto rngc = rng;
@@ -345,6 +386,19 @@ struct Dino
 
 	void Update(float dt)
 	{
+		if (push.Len2() > 0.0f)
+		{
+			push.y -= 2.5f * dt;
+			pos += push * dt;
+			if (pos.y < 0.0f)
+			{
+				pos.y = 0.0f;
+				push = v4::Zero();
+			}
+			UpdateTransform();
+			return;
+		}
+
 		if ((wander_time -= dt) < 0.0f)
 		{
 			wander_time = RngF(1.5f, 8.0f)(rng);
@@ -361,14 +415,34 @@ struct Dino
 				lr_t = 0.0f;
 				model_id = !model_id;
 			}
+			UpdateTransform();
 		}
+	}
+
+	void UpdateTransform()
+	{
+		transform = Mtx::Translate(pos) * Mtx::RotateY(angle);
+		memcpy(bboxt, bbox, sizeof(bbox));
+		bboxt[0].Transform(transform * Mtx::Translate({-0.45f, 0.75f, 0.0f}));
+		bboxt[1].Transform(transform * Mtx::Translate({0.35f, 1.55f, 0.0f}));
+	}
+
+	void Push(v4 in_push)
+	{
+		push = in_push;
 	}
 
 	v4 GetForward() const { return {cosf(angle), 0.0f, sinf(angle), 0.0f}; }
 
 	void CopyTo(std::vector<Quad>& in_quads) const
 	{
-		Model(models[model_id]).Transform(Mtx::Translate(pos) * Mtx::RotateY(angle)).Light({0.5f, -0.5f, 0.5f}).CopyTo(in_quads);
+		Model(models[model_id]).Transform(transform).Light({0.5f, -0.5f, 0.5f}).CopyTo(in_quads);
+#define DRAW_HITBOX
+#if defined(DRAW_HITBOX)
+		for (int i = 0; i < 2; ++i)
+		for (auto& q : bboxt[i].quads)
+			in_quads.push_back(q);
+#endif
 	}
 
 	v4 pos{0.0f, 0.0f, 0.0f};
@@ -382,19 +456,24 @@ struct Dino
 	Model models[2];
 	Rng rng;
 	const Map* map = nullptr;
+	v4 push = v4::Zero();
+	Box bbox[2];
+	Box bboxt[2];
+	Mtx transform;
 };
 
 struct Rock
 {
-	Rock(const Model& in_model)
-		: model(&in_model) {}
+	Rock(const Model& in_model, Rng* in_rng)
+		: model(&in_model), rng(in_rng) {}
 
-	void Update(float dt)
+	void Update(float dt, std::vector<Dino>& dinos)
 	{
 		if (!in_game || sleeps)
 			return;
 
-		if (vel.Len2() < sleep_vel2)
+		constexpr float floor_y = 0.1f;
+		if (vel.Len2() < sleep_vel2 && fabs(pos.y - floor_y) < 0.1f)
 		{
 			sleeps = true;
 			return;
@@ -405,7 +484,6 @@ struct Rock
 		angle_vel -= 0.15f * angle_vel * dt; 
 		angle_x += angle_vel * dt;
 		angle_z += angle_vel * 0.5f * dt;
-		constexpr float floor_y = 0.1f;
 		if (pos.y < floor_y)
 		{
 			bounce_num++;
@@ -414,6 +492,24 @@ struct Rock
 			vel.y = -vel.y;
 			if (bounce_num = 1)
 				angle_vel = angle_speed * 2.0f;
+		}
+		else 
+		{
+			for (auto& dino : dinos)
+				if (dino_hit != &dino && pos.Dist2(dino.pos) < 8.5f)
+				{
+					if (dino.bboxt[0].Contains(pos) || dino.bboxt[1].Contains(pos))
+					{
+						float hit_s = 0.05f * sqrtf(vel.Len2());
+						v4 hit = vel * hit_s;
+						hit.y = 3.5f * hit_s;
+						dino.Push(hit);
+						dino_hit = &dino;
+						vel = Mtx::RotateY(RngF(M_PI / 2.0f, M_PI * 3/4)(*rng)) * vel * 0.2f;
+						vel.y = RngF(1.0f, 3.0f)(*rng);
+						break;
+					}
+				}
 		}
 	}
 
@@ -425,6 +521,7 @@ struct Rock
 		vel = v;
 		angle_vel = angle_speed;
 		bounce_num = 0;
+		dino_hit = nullptr;
 	}
 
 	void CopyTo(std::vector<Quad>& in_quads) const
@@ -435,14 +532,16 @@ struct Rock
 
 	v4 pos = v4::Zero();
 	v4 vel = v4::Zero();
+	const Model* model = nullptr;
+	const Dino* dino_hit = nullptr;
+	Rng* rng = nullptr;
 	float angle_x = 0.0f;
 	float angle_z = 0.0f;
 	float angle_speed = 3.0f;
 	float angle_vel = 3.0f;
-	float g = 1.0f;
+	float g = 2.0f;
 	float bounce = 2.0f;
 	float sleep_vel2 = 0.5f;
-	const Model* model = nullptr;
 	int bounce_num = 0;
 	bool in_game = false;
 	bool sleeps = true;
@@ -451,19 +550,22 @@ struct Rock
 struct Player
 {
 	Player(Input& in_input, const Model& rock_model)
-		: input(&in_input), rocks(8, Rock(rock_model))
+		: input(&in_input), rocks(8, Rock(rock_model, &rng))
 	{}
 
-	void Update(float dt)
+	void Update(float dt, std::vector<Dino>& dinos)
 	{
 		camera.Update(*input, dt);
-		if (input->ConsumeKey(Key_Space))
+		if ((rock_cd -= dt) < 0.0f && input->keys_up[Key_Space])
 		{
+			rock_cd = 0.5f;
 			rock_id = (rock_id + 1) % rocks.size();
-			rocks[rock_id].Throw(camera.pos, camera.GetForward() * 5.5f);
+			v4 throw_v = camera.GetForward() * 5.5f * std::clamp(input->keys_time[Key_Space] * 2.0f, 0.5f, 1.5f);
+			throw_v.y = std::clamp(input->keys_time[Key_Space] * 2.0f, 0.0f, 2.5f);
+			rocks[rock_id].Throw(camera.pos + camera.GetRight() * 0.25f, throw_v);
 		}
 		for (auto& rock : rocks)
-			rock.Update(dt);
+			rock.Update(dt, dinos);
 	}
 	
 	void CopyTo(std::vector<Quad>& in_quads) const
@@ -474,8 +576,10 @@ struct Player
 
 	Camera camera;
 	Input* input = nullptr;
+	Rng rng;
 	std::vector<Rock> rocks;
 	int rock_id = 0;
+	float rock_cd = 0.0f;
 };
 
 void GenerateStaticScene(std::vector<Quad>& quads, const Map& map, const Model& cactus)
@@ -764,8 +868,8 @@ int main()
 		input.keys[key] = is_pressed;
 		if (!is_pressed)
 		{
-			input.keys_time[key] = 0.0f;
 			input.keys_has_been_pressed[key] &= 0x2;
+			input.keys_up[key] = true;
 		}
 		else if (input.keys_has_been_pressed[key] == 0u)
 			input.keys_has_been_pressed[key] = 3;
@@ -826,7 +930,7 @@ int main()
 
 		input.Update(dt);
 		ltf = input.ConsumeKey(24);
-		player.Update(dt);
+		player.Update(dt, dinos);
 		view_proj = projection * player.camera.GetViewMatrix(); 
 
 		quads.clear();
@@ -837,6 +941,7 @@ int main()
 			dino.CopyTo(quads);
 		}
 		player.CopyTo(quads);
+		input.EndFrame();
 	});
 
 	std::barrier collect_quads_barrier(jobs.GetSize() + 1, [&]()
