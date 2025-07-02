@@ -74,6 +74,12 @@ struct v4
 		return *this * (1.0f / sqrt(Dot(*this)));
 	}
 
+	float Dist2(v4 v) const
+	{
+		v4 diff = *this - v;
+		return diff.Dot(diff);
+	}
+
 	friend std::ostream& operator << (std::ostream& os, v4 v)
 	{
 		os << "{" << v.x << ", " << v.y << ", " << v.z << ", " << v.w << "}";

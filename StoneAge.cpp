@@ -215,12 +215,15 @@ struct Camera
 	float rotation_speed = 1.15f;
 };
 
+
+using Rng = std::mt19937;
+using RngF = std::uniform_real_distribution<float>;
+using RngI = std::uniform_int_distribution<int>;
+
 struct Model
 {
 	Model(const char* filename)
 	{
-		std::default_random_engine reng;
-		std::uniform_real_distribution<float> d(0.3f, 1.0f);
 		std::ifstream f(filename);
 		v4 verts[4] = { {1.0f}, {1.0f}, {1.0f}, {1.0f} };
 		v4 color = {1.0f};
@@ -257,12 +260,80 @@ struct Model
 		return *this;
 	}
 
+	Model& Colorize(v4 min, v4 max, Rng& rng)
+	{
+		for (auto& q : quads)
+			if (q.color.x < 0.0f)
+				q.color = v4{RngF(min.x, max.x)(rng), RngF(min.y, max.y)(rng), RngF(min.z, max.z)(rng)};
+		return *this;
+	}
+
 	void CopyTo(std::vector<Quad>& in_quads) const
 	{
 		in_quads.insert(in_quads.end(), quads.begin(), quads.end());
 	}
 
 	std::vector<Quad> quads;
+};
+
+
+struct Dino
+{
+	Dino(const Model& in_model_wl, const Model& in_model_wr, Rng& in_rng)
+		: models{in_model_wl, in_model_wr}, rng(in_rng)
+	{
+		v4 min{0.3f, 0.5f, 0.0f}, max{0.9f, 0.9f, 0.1f};
+		auto rngc = rng;
+		models[0].Colorize(min, max, rngc);
+		rngc = rng;
+		models[1].Colorize(min, max, rngc);
+		RngI mp(-20, 20);
+		float x = mp(rngc);
+		float y = mp(rngc);
+		LOG("{} {}", x, y);
+		pos = v4{x, 0.0f, y};
+	}
+
+	void Update(float dt)
+	{
+		if (pos.Dist2(wander_pos) < 1.0f)
+			wander_time = 0.0f;
+
+		if ((wander_time -= dt) < 0.0f)
+		{
+			wander_time = RngF(0.5f, 3.0f)(rng);
+			wander_pos = v4{RngF(-20.0f, 20.0f)(rng), 0.0f, RngF(-20.0f, 20.0f)(rng)};
+		}
+		
+		if (/*walking*/true)
+		{
+			if ((lr_t += dt) > lr_period)
+			{
+				lr_t = 0.0f;
+				model_id = !model_id;
+			}
+		}
+		angle = atan2f(wander_pos.z - pos.z, wander_pos.x - pos.x);
+		pos += GetForward() * speed * dt; 
+	}
+
+	v4 GetForward() const { return {cosf(angle), 0.0f, sinf(angle)}; }
+
+	void CopyTo(std::vector<Quad>& in_quads) const
+	{
+		Model(models[model_id]).Transform(Mtx::Translate(pos) * Mtx::RotateY(angle)).Light({0.5f, -0.5f, 0.5f}).CopyTo(in_quads);
+	}
+
+	v4 pos{0.0f, 0.0f, 0.0f};
+	float angle = 0.0f;
+	float speed = 1.0f;
+	float wander_time = 1.0f;
+	float lr_period = 0.5f;
+	float lr_t = 0.0f;
+	v4 wander_pos;
+	uint model_id = 0u;
+	Model models[2];
+	Rng rng;
 };
 
 void GenerateStaticScene(std::vector<Quad>& quads, const Model& cactus)
@@ -274,23 +345,23 @@ void GenerateStaticScene(std::vector<Quad>& quads, const Model& cactus)
 	constexpr float map_sz2f = (float)map_sz2;
 	constexpr int num_cactuses = 50;
 
-	std::default_random_engine reng(2);
+	Rng rng(2);
 	bool objs[map_sz][map_sz];
 	memset(objs, 0, sizeof(objs));
-	std::uniform_int_distribution<int> cpick(-map_sz2 + 1, map_sz2 - 1);
-	std::uniform_real_distribution<float> rpick(0.0f, M_PI * 2.0f);
+	RngI cpick(-map_sz2 + 1, map_sz2 - 1);
+	RngF rpick(0.0f, M_PI * 2.0f);
 	for (int i = 0; i < num_cactuses; ++i)
 	{
 		int j = 0;
 		while (j++ < map_sz * map_sz)
 		{
-			i2 coords{cpick(reng), cpick(reng)};
+			i2 coords{cpick(rng), cpick(rng)};
 			i2 pos_coords = coords + i2{map_sz2, map_sz2};
 			if (objs[pos_coords.x][pos_coords.y])
 				continue;
 
 			objs[pos_coords.x][pos_coords.y] = true;
-			Model(cactus).Transform(Mtx::Translate({(float)coords.x, 0.0f, (float)coords.y}) * Mtx::RotateY(rpick(reng)) * Mtx::Scale(0.5f)).Light({0.5f, -0.5f, 0.5f}).CopyTo(quads);
+			Model(cactus).Transform(Mtx::Translate({(float)coords.x, 0.0f, (float)coords.y}) * Mtx::RotateY(rpick(rng)) * Mtx::Scale(0.5f)).Colorize({0.2f, 0.5f, 0.0f}, {0.6f, 0.9f, 0.1f}, rng).Light({0.5f, -0.5f, 0.5f}).CopyTo(quads);
 			break;
 		}
 	}
@@ -431,16 +502,6 @@ void RasterizeQuad(Quad& q, auto& frame, auto& depth, i2 tiles)
 						pixel_color[i] = q.color;
 						frame_depth[i] = pixel_depth;
 					}
-				}
-				if (e[0] <= 0.0f && e[1] <= 0.0f && e[2] <= 0.0f && e[3] < 0.0f)
-				{
-					float pixel_depth = (q.verts[0].Dot(normal) - p.Dot(normal)) / normal.z;
-					if (pixel_depth < frame_depth[i])
-					{
-						pixel_color[i] = v4(1.0f, 0.0f, 1.0f);//q.color;
-						frame_depth[i] = pixel_depth;
-					}
-
 				}
 			}
 		}
@@ -613,6 +674,15 @@ int main()
 	Model cactus("cactus.qobj");
 	std::vector<Quad> static_scene;
 	GenerateStaticScene(static_scene, cactus);
+	Model dino_model_wl("dino_wl.qobj");
+	Model dino_model_wr("dino_wr.qobj");
+	constexpr int dinos_num = 16;
+	std::vector<Dino> dinos;
+	for (int i = 0; i < dinos_num; ++i)
+	{
+		Rng rng(i);
+		dinos.emplace_back(dino_model_wl, dino_model_wr, rng);
+	}
 
 	std::barrier frame_start_barrier(jobs.GetSize() + 1, [&]()
 	{
@@ -630,10 +700,15 @@ int main()
 		input.Update(dt);
 		ltf = input.ConsumeKey(24);
 		camera.Update(input, dt);
+		view_proj = projection * camera.GetViewMatrix(); 
+
 		quads.clear();
 		quads.insert(quads.end(), static_scene.begin(), static_scene.end());
-		
-		view_proj = projection * camera.GetViewMatrix(); 
+		for (Dino& dino : dinos)
+		{
+			dino.Update(dt);
+			dino.CopyTo(quads);
+		}
 	});
 
 	std::barrier collect_quads_barrier(jobs.GetSize() + 1, [&]()
