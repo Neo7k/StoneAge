@@ -276,48 +276,93 @@ struct Model
 	std::vector<Quad> quads;
 };
 
+struct Map
+{
+	enum class Cell
+	{
+		Empty,
+		Cactus
+	};
+
+	virtual ~Map() = default;
+	virtual int GetSize() const = 0; 
+	virtual Cell& At(i2 c) = 0;
+	virtual const Cell& At(i2 c) const = 0;
+};
+
+template<int size>
+struct MapT : public Map
+{
+	
+	MapT()
+	{
+		memset(map, 0, sizeof(map));
+		constexpr int map_sz = size;
+		constexpr int map_sz2 = map_sz / 2;
+		constexpr float ms2f = (float)map_sz2;
+		constexpr int num_cactuses = 50;
+
+		Rng rng(2);
+		RngI cpick(-map_sz2 + 1, map_sz2 - 1);
+		RngF rpick(0.0f, M_PI * 2.0f);
+		for (int i = 0; i < num_cactuses; ++i)
+		{
+			int j = 0;
+			while (j++ < map_sz * map_sz)
+			{
+				i2 coords{cpick(rng), cpick(rng)};
+				if (At(coords) == Cell::Empty)
+				{
+					At(coords) = Cell::Cactus;
+					break;
+				}
+			}
+		}
+	}
+
+	virtual int GetSize() const override { return size; }
+	virtual Cell& At(i2 c) override { return map[c.y + size / 2][c.x + size / 2]; }
+	virtual const Cell& At(i2 c) const override { return map[c.y + size / 2][c.x + size / 2]; }
+
+	Cell map[size][size];
+};
 
 struct Dino
 {
-	Dino(const Model& in_model_wl, const Model& in_model_wr, Rng& in_rng)
-		: models{in_model_wl, in_model_wr}, rng(in_rng)
+	Dino(const Model& in_model_wl, const Model& in_model_wr, Rng& in_rng, const auto& in_map)
+		: models{in_model_wl, in_model_wr}, rng(in_rng), map(&in_map)
 	{
 		v4 min{0.3f, 0.5f, 0.0f}, max{0.9f, 0.9f, 0.1f};
 		auto rngc = rng;
 		models[0].Colorize(min, max, rngc);
 		rngc = rng;
 		models[1].Colorize(min, max, rngc);
-		RngI mp(-20, 20);
-		float x = mp(rngc);
-		float y = mp(rngc);
-		LOG("{} {}", x, y);
-		pos = v4{x, 0.0f, y};
+		RngI mp(-map->GetSize() / 2, map->GetSize() / 2);
+		pos = v4{(float)mp(rng), 0.0f, (float)mp(rng)};
 	}
 
 	void Update(float dt)
 	{
-		if (pos.Dist2(wander_pos) < 1.0f)
-			wander_time = 0.0f;
-
 		if ((wander_time -= dt) < 0.0f)
 		{
-			wander_time = RngF(0.5f, 3.0f)(rng);
-			wander_pos = v4{RngF(-20.0f, 20.0f)(rng), 0.0f, RngF(-20.0f, 20.0f)(rng)};
+			wander_time = RngF(1.5f, 8.0f)(rng);
+			RngF wr(-5.0f, 5.0f);
+			wander_pos = pos + v4{wr(rng), 0.0f, wr(rng)};
 		}
 		
-		if (/*walking*/true)
+		if (pos.Dist2(wander_pos) > 2.0f)
 		{
+			angle = atan2f(wander_pos.z - pos.z, wander_pos.x - pos.x);
+			pos += GetForward() * speed * dt; 
 			if ((lr_t += dt) > lr_period)
 			{
 				lr_t = 0.0f;
 				model_id = !model_id;
 			}
 		}
-		angle = atan2f(wander_pos.z - pos.z, wander_pos.x - pos.x);
-		pos += GetForward() * speed * dt; 
 	}
 
-	v4 GetForward() const { return {cosf(angle), 0.0f, sinf(angle)}; }
+	v4 GetForward() const { return {cosf(angle), 0.0f, sinf(angle), 0.0f}; }
 
 	void CopyTo(std::vector<Quad>& in_quads) const
 	{
@@ -334,44 +379,29 @@ struct Dino
 	uint model_id = 0u;
 	Model models[2];
 	Rng rng;
+	const Map* map = nullptr;
 };
 
-void GenerateStaticScene(std::vector<Quad>& quads, const Model& cactus)
+void GenerateStaticScene(std::vector<Quad>& quads, const Map& map, const Model& cactus)
 {
 	quads.clear();
 
-	constexpr int map_sz = 40;
-	constexpr int map_sz2 = map_sz / 2;
-	constexpr float map_sz2f = (float)map_sz2;
-	constexpr int num_cactuses = 50;
-
-	Rng rng(2);
-	bool objs[map_sz][map_sz];
-	memset(objs, 0, sizeof(objs));
-	RngI cpick(-map_sz2 + 1, map_sz2 - 1);
-	RngF rpick(0.0f, M_PI * 2.0f);
-	for (int i = 0; i < num_cactuses; ++i)
+	Rng rng;
+	int ms2 = map.GetSize() / 2 - 1;
+	float ms2f = map.GetSize() / 2.0f;
+	for (int i = -ms2; i < ms2; ++i)
+	for (int j = -ms2; j < ms2; ++j)
 	{
-		int j = 0;
-		while (j++ < map_sz * map_sz)
-		{
-			i2 coords{cpick(rng), cpick(rng)};
-			i2 pos_coords = coords + i2{map_sz2, map_sz2};
-			if (objs[pos_coords.x][pos_coords.y])
-				continue;
-
-			objs[pos_coords.x][pos_coords.y] = true;
-			Model(cactus).Transform(Mtx::Translate({(float)coords.x, 0.0f, (float)coords.y}) * Mtx::RotateY(rpick(rng)) * Mtx::Scale(0.5f)).Colorize({0.2f, 0.5f, 0.0f}, {0.6f, 0.9f, 0.1f}, rng).Light({0.5f, -0.5f, 0.5f}).CopyTo(quads);
-			break;
-		}
+		if (map.At({i, j}) == Map::Cell::Cactus)
+			Model(cactus).Transform(Mtx::Translate({(float)i, 0.0f, (float)j}) * Mtx::RotateY(RngF(0.0f, M_PI * 2)(rng)) * Mtx::Scale(0.5f)).Colorize({0.2f, 0.5f, 0.0f}, {0.6f, 0.9f, 0.1f}, rng).Light({0.5f, -0.5f, 0.5f}).CopyTo(quads);
 	}
 	// Floor
 	quads.emplace_back(Quad
 	{
-		v4{-map_sz2f, 0.0f, map_sz2f},
-		v4{-map_sz2f, 0.0f, -map_sz2f},
-		v4{map_sz2f, 0.0f, -map_sz2f},
-		v4{map_sz2f, 0.0f, map_sz2f},
+		v4{-ms2f, 0.0f, ms2f},
+		v4{-ms2f, 0.0f, -ms2f},
+		v4{ms2f, 0.0f, -ms2f},
+		v4{ms2f, 0.0f, ms2f},
 		v4{0.5f, 0.5f, 0.5f}
 	});
 }
@@ -671,9 +701,10 @@ int main()
 	};
 	Mtx view_proj;
 
+	MapT<40> map;
 	Model cactus("cactus.qobj");
 	std::vector<Quad> static_scene;
-	GenerateStaticScene(static_scene, cactus);
+	GenerateStaticScene(static_scene, map, cactus);
 	Model dino_model_wl("dino_wl.qobj");
 	Model dino_model_wr("dino_wr.qobj");
 	constexpr int dinos_num = 16;
@@ -681,7 +712,7 @@ int main()
 	for (int i = 0; i < dinos_num; ++i)
 	{
 		Rng rng(i);
-		dinos.emplace_back(dino_model_wl, dino_model_wr, rng);
+		dinos.emplace_back(dino_model_wl, dino_model_wr, rng, map);
 	}
 
 	std::barrier frame_start_barrier(jobs.GetSize() + 1, [&]()

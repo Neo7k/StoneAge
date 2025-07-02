@@ -39,12 +39,12 @@ struct v4
 		: x(in_x), y(in_y), z(in_z), w(1.0f) {}
 	
 	v4 operator * (i2 other) const { return v4{x * other.x, y * other.y, z, w};	}
-	v4 operator * (v4 other) const { return v4{x * other.x, y * other.y, z * other.z, w * other.w}; }
+	v4 operator * (const v4& other) const { return v4{x * other.x, y * other.y, z * other.z, w * other.w}; }
 	v4 operator * (float other) const { return v4{x * other, y * other, z * other, w * other}; }
 	void operator /= (float other) { x /= other; y /= other; z /= other; w /= other; }
-	v4 operator += (v4 other) { x += other.x; y += other.y; z += other.z; w += other.w; return *this; }
-	v4 operator + (v4 other) const { return v4{x + other.x, y + other.y, z + other.z, w + other.w}; }
-	v4 operator - (v4 other) const { return v4{x - other.x, y - other.y, z - other.z, w - other.w}; }
+	v4 operator += (const v4& other) { x += other.x; y += other.y; z += other.z; w += other.w; return *this; }
+	v4 operator + (const v4& other) const { return v4{x + other.x, y + other.y, z + other.z, w + other.w}; }
+	v4 operator - (const v4& other) const { return v4{x - other.x, y - other.y, z - other.z, w - other.w}; }
 	float& operator [] (int index) 
 	{
 		if (index == 0) return x;
@@ -59,12 +59,12 @@ struct v4
 		return v4{0.0f, 0.0f, 0.0f, 0.0f};
 	}
 
-	float Dot(v4 v) const
+	float Dot(const v4& v) const
 	{
 		return x * v.x + y * v.y + z * v.z + w * v.w;
 	}
 
-	v4 Cross(v4 v) const
+	v4 Cross(const v4& v) const
 	{
 		return {y*v.z - z*v.y, z*v.x - x*v.z, x*v.y - y*v.x, 0.0f};
 	}
@@ -74,9 +74,9 @@ struct v4
 		return *this * (1.0f / sqrt(Dot(*this)));
 	}
 
-	float Dist2(v4 v) const
+	float Dist2(const v4& v) const
 	{
-		v4 diff = *this - v;
+		v4 diff = v - *this;
 		return diff.Dot(diff);
 	}
 
@@ -180,7 +180,7 @@ struct Mtx
 		};
 	}
 	
-	static Mtx Translate(v4 v)
+	static Mtx Translate(const v4& v)
 	{
 		return
 		{
@@ -203,7 +203,7 @@ struct Mtx
 	}
 
 
-	v4 operator * (v4 v) const
+	v4 operator * (const v4& v) const
 	{
 		return v4{lines[0].Dot(v),
 							lines[1].Dot(v),
