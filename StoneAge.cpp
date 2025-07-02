@@ -33,6 +33,7 @@ constexpr int Key_S = 39;
 constexpr int Key_D = 40;
 constexpr int Key_Left = 113;
 constexpr int Key_Right = 114;
+constexpr int Key_Space = 65;
 
 constexpr float Near = 0.1f;
 constexpr float Far = 20.0f;
@@ -255,6 +256,7 @@ struct Model
 
 	Model& Light(v4 light_dir)
 	{
+		light_dir = light_dir.Normalized();
 		for (auto& q : quads)
 			q.color = q.color * std::max(q.GetNormal().Normalized().Dot(light_dir), 0.3f);
 		return *this;
@@ -380,6 +382,100 @@ struct Dino
 	Model models[2];
 	Rng rng;
 	const Map* map = nullptr;
+};
+
+struct Rock
+{
+	Rock(const Model& in_model)
+		: model(&in_model) {}
+
+	void Update(float dt)
+	{
+		if (!in_game || sleeps)
+			return;
+
+		if (vel.Len2() < sleep_vel2)
+		{
+			sleeps = true;
+			return;
+		}
+
+		vel -= v4{0.0f, g, 0.0f, 0.0f} * dt;
+		pos += vel * dt;
+		angle_vel -= 0.15f * angle_vel * dt; 
+		angle_x += angle_vel * dt;
+		angle_z += angle_vel * 0.5f * dt;
+		constexpr float floor_y = 0.1f;
+		if (pos.y < floor_y)
+		{
+			bounce_num++;
+			pos.y = floor_y;
+			vel /= bounce;
+			vel.y = -vel.y;
+			if (bounce_num = 1)
+				angle_vel = angle_speed * 2.0f;
+		}
+	}
+
+	void Throw(v4 p, v4 v)
+	{
+		in_game = true;
+		sleeps = false;
+		pos = p;
+		vel = v;
+		angle_vel = angle_speed;
+		bounce_num = 0;
+	}
+
+	void CopyTo(std::vector<Quad>& in_quads) const
+	{
+		if (in_game)
+			Model(*model).Transform(Mtx::Translate(pos) * Mtx::RotateX(angle_x) * Mtx::RotateZ(angle_z)).Light({0.5f, -0.5f, 0.5f}).CopyTo(in_quads);
+	}
+
+	v4 pos = v4::Zero();
+	v4 vel = v4::Zero();
+	float angle_x = 0.0f;
+	float angle_z = 0.0f;
+	float angle_speed = 3.0f;
+	float angle_vel = 3.0f;
+	float g = 1.0f;
+	float bounce = 2.0f;
+	float sleep_vel2 = 0.5f;
+	const Model* model = nullptr;
+	int bounce_num = 0;
+	bool in_game = false;
+	bool sleeps = true;
+};
+
+struct Player
+{
+	Player(Input& in_input, const Model& rock_model)
+		: input(&in_input), rocks(8, Rock(rock_model))
+	{}
+
+	void Update(float dt)
+	{
+		camera.Update(*input, dt);
+		if (input->ConsumeKey(Key_Space))
+		{
+			rock_id = (rock_id + 1) % rocks.size();
+			rocks[rock_id].Throw(camera.pos, camera.GetForward() * 5.5f);
+		}
+		for (auto& rock : rocks)
+			rock.Update(dt);
+	}
+	
+	void CopyTo(std::vector<Quad>& in_quads) const
+	{
+		for (auto& rock : rocks)
+			rock.CopyTo(in_quads);
+	}
+
+	Camera camera;
+	Input* input = nullptr;
+	std::vector<Rock> rocks;
+	int rock_id = 0;
 };
 
 void GenerateStaticScene(std::vector<Quad>& quads, const Map& map, const Model& cactus)
@@ -679,8 +775,6 @@ int main()
 
 	PerfTracker<5> perf;
 
-	Camera camera;
-	
 	Jobs jobs;
 	std::vector<Quad> quads;
 	std::vector<uint> valid_qids;
@@ -714,6 +808,8 @@ int main()
 		Rng rng(i);
 		dinos.emplace_back(dino_model_wl, dino_model_wr, rng, map);
 	}
+	Model rock_model("rock.qobj");
+	Player player(input, rock_model);
 
 	std::barrier frame_start_barrier(jobs.GetSize() + 1, [&]()
 	{
@@ -730,8 +826,8 @@ int main()
 
 		input.Update(dt);
 		ltf = input.ConsumeKey(24);
-		camera.Update(input, dt);
-		view_proj = projection * camera.GetViewMatrix(); 
+		player.Update(dt);
+		view_proj = projection * player.camera.GetViewMatrix(); 
 
 		quads.clear();
 		quads.insert(quads.end(), static_scene.begin(), static_scene.end());
@@ -740,6 +836,7 @@ int main()
 			dino.Update(dt);
 			dino.CopyTo(quads);
 		}
+		player.CopyTo(quads);
 	});
 
 	std::barrier collect_quads_barrier(jobs.GetSize() + 1, [&]()

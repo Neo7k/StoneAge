@@ -43,6 +43,7 @@ struct v4
 	v4 operator * (float other) const { return v4{x * other, y * other, z * other, w * other}; }
 	void operator /= (float other) { x /= other; y /= other; z /= other; w /= other; }
 	v4 operator += (const v4& other) { x += other.x; y += other.y; z += other.z; w += other.w; return *this; }
+	v4 operator -= (const v4& other) { x -= other.x; y -= other.y; z -= other.z; w -= other.w; return *this; }
 	v4 operator + (const v4& other) const { return v4{x + other.x, y + other.y, z + other.z, w + other.w}; }
 	v4 operator - (const v4& other) const { return v4{x - other.x, y - other.y, z - other.z, w - other.w}; }
 	float& operator [] (int index) 
@@ -71,13 +72,18 @@ struct v4
 
 	v4 Normalized() const
 	{
-		return *this * (1.0f / sqrt(Dot(*this)));
+		return *this * (1.0f / sqrt(Len2()));
 	}
 
 	float Dist2(const v4& v) const
 	{
 		v4 diff = v - *this;
 		return diff.Dot(diff);
+	}
+
+	float Len2() const
+	{
+		return Dot(*this);
 	}
 
 	friend std::ostream& operator << (std::ostream& os, v4 v)
@@ -169,6 +175,16 @@ struct Mtx
 		lines[3] = l4;
 	}
 
+	static Mtx RotateX(float angle)
+	{
+		return
+		{
+			{0.0f, 1.0f, 0.0f, 0.0f},
+			{cosf(angle), 0.0f, -sinf(angle), 0.0f},
+			{sin(angle), 0.0f, cos(angle), 0.0f},
+			{0.0f, 0.0f, 0.0f, 1.0f}
+		};
+	}
 	static Mtx RotateY(float angle)
 	{
 		return
@@ -176,6 +192,16 @@ struct Mtx
 			{cosf(angle), 0.0f, -sinf(angle), 0.0f},
 			{0.0f, 1.0f, 0.0f, 0.0f},
 			{sin(angle), 0.0f, cos(angle), 0.0f},
+			{0.0f, 0.0f, 0.0f, 1.0f}
+		};
+	}
+	static Mtx RotateZ(float angle)
+	{
+		return
+		{
+			{cosf(angle), 0.0f, -sinf(angle), 0.0f},
+			{sin(angle), 0.0f, cos(angle), 0.0f},
+			{0.0f, 1.0f, 0.0f, 0.0f},
 			{0.0f, 0.0f, 0.0f, 1.0f}
 		};
 	}
