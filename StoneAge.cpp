@@ -217,11 +217,13 @@ struct Camera
 			};
 	}
 
-	v4 pos = v4{0.0f, 1.0f, 0.0f, 1.0f};
-	float angle = 0.0f;
+	v4 GetPos2d() const { return {pos.x, 0.0f, pos.z}; }
 
-	float speed = 1.0f;
-	float rotation_speed = 1.15f;
+	static constexpr float h = 1.0f;
+	static constexpr float speed = 1.0f;
+	static constexpr float rotation_speed = 1.15f;
+	v4 pos = v4{0.0f, h, 0.0f, 1.0f};
+	float angle = 0.0f;
 };
 
 
@@ -331,10 +333,11 @@ struct MapT : public Map
 	}
 
 	virtual int GetSize() const override { return size; }
-	virtual Cell& At(i2 c) override { return map[c.y + size / 2][c.x + size / 2]; }
-	virtual const Cell& At(i2 c) const override { return map[c.y + size / 2][c.x + size / 2]; }
+	virtual Cell& At(i2 c) override { c = c + i2{size/2}; if (c.x < 0 || c.x >= size || c.y < 0 || c.y >= size) return invalid; return map[c.y][c.x]; }
+	virtual const Cell& At(i2 c) const override { c = c + i2{size/2}; if (c.x < 0 || c.x >= size || c.y < 0 || c.y >= size) return invalid; return map[c.y][c.x]; }
 
 	Cell map[size][size];
+	Cell invalid = Cell::Empty;
 };
 
 struct Box
@@ -369,11 +372,19 @@ struct Box
 	Quad quads[6];
 };
 
+struct Player;
 struct Dino
 {
+	enum State
+	{
+		Wander,
+		Chase,
+		Flee
+	};
+
 	Dino(const Model& in_model_wl, const Model& in_model_wr, Rng& in_rng, const auto& in_map)
 		: models{in_model_wl, in_model_wr}, rng(in_rng), map(&in_map)
-		, bbox{{1.5f, 0.85f, 0.5f},{1.0f, 1.0f, 0.5f}}
+		, bbox{{1.5f, 0.95f, 0.5f},{1.1f, 1.1f, 0.5f}}
 	{
 		v4 min{0.3f, 0.5f, 0.0f}, max{0.9f, 0.9f, 0.1f};
 		auto rngc = rng;
@@ -384,7 +395,7 @@ struct Dino
 		pos = v4{(float)mp(rng), 0.0f, (float)mp(rng)};
 	}
 
-	void Update(float dt)
+	void Update(float dt, Player& player)
 	{
 		if (push.Len2() > 0.0f)
 		{
@@ -395,36 +406,54 @@ struct Dino
 				pos.y = 0.0f;
 				push = v4::Zero();
 			}
+			assert(pos.w == 1.0f);
 			UpdateTransform();
 			return;
 		}
 
-		if ((wander_time -= dt) < 0.0f)
+		if (state == State::Wander)
 		{
-			wander_time = RngF(1.5f, 8.0f)(rng);
-			RngF wr(-5.0f, 5.0f);
-			wander_pos = pos + v4{wr(rng), 0.0f, wr(rng)};
+			UpdateWander(dt, player);
+		}
+		if (state == State::Chase)
+		{
+			UpdateChase(dt, player);
+		}
+		if (state == State::Flee)
+		{
+			UpdateFlee(dt, player);
 		}
 		
-		if (pos.Dist2(wander_pos) > 2.0f)
+		if (pos.Dist2(target_pos) > 1.5f)
 		{
-			angle = atan2f(wander_pos.z - pos.z, wander_pos.x - pos.x);
+			angle = atan2f(target_pos.z - pos.z, target_pos.x - pos.x);
 			pos += GetForward() * speed * dt; 
+			UpdateTransform();
+			i2 ipos{(int)pos.x, (int)pos.z};
+			if (map->At(ipos) == Map::Cell::Cactus)
+			{
+				if (pos.Dist2(v4{ipos.x + 0.5f, 0.0f, ipos.y + 0.5f}) < 1.5f)
+					Push(GetForward() * speed + v4(0.0f, 2.5f, 0.0f, 0.0f));
+			}
+
 			if ((lr_t += dt) > lr_period)
 			{
 				lr_t = 0.0f;
 				model_id = !model_id;
 			}
-			UpdateTransform();
 		}
 	}
+	
+	void UpdateWander(float dt, Player& player);
+	void UpdateChase(float dt, Player& player);
+	void UpdateFlee(float dt, Player& player);
 
 	void UpdateTransform()
 	{
 		transform = Mtx::Translate(pos) * Mtx::RotateY(angle);
 		memcpy(bboxt, bbox, sizeof(bbox));
-		bboxt[0].Transform(transform * Mtx::Translate({-0.45f, 0.75f, 0.0f}));
-		bboxt[1].Transform(transform * Mtx::Translate({0.35f, 1.55f, 0.0f}));
+		bboxt[0].Transform(transform * Mtx::Translate({-0.45f, 0.80f, 0.0f}));
+		bboxt[1].Transform(transform * Mtx::Translate({0.40f, 1.55f, 0.0f}));
 	}
 
 	void Push(v4 in_push)
@@ -432,13 +461,35 @@ struct Dino
 		push = in_push;
 	}
 
+	void Hit(float s)
+	{
+		if (state == State::Wander)
+		{
+			aggression = 1.0f;
+			state = State::Chase;
+		}
+		else if (state == State::Chase)
+		{
+			aggression -= s;
+			if (aggression < 0.0f)
+			{
+				state = State::Flee;
+				flee_time = 8.0f;
+			}
+		}
+		else if (state == State::Flee)
+		{
+			flee_time += 2.0f;
+		}
+	}
+
 	v4 GetForward() const { return {cosf(angle), 0.0f, sinf(angle), 0.0f}; }
 
 	void CopyTo(std::vector<Quad>& in_quads) const
 	{
 		Model(models[model_id]).Transform(transform).Light({0.5f, -0.5f, 0.5f}).CopyTo(in_quads);
-#define DRAW_HITBOX
-#if defined(DRAW_HITBOX)
+#define DRAW_HITBOX 0
+#if DRAW_HITBOX
 		for (int i = 0; i < 2; ++i)
 		for (auto& q : bboxt[i].quads)
 			in_quads.push_back(q);
@@ -449,9 +500,12 @@ struct Dino
 	float angle = 0.0f;
 	float speed = 1.0f;
 	float wander_time = 1.0f;
+	State state = State::Wander;
+	float aggression = 0.0f;
+	float flee_time = 0.0f;
 	float lr_period = 0.5f;
 	float lr_t = 0.0f;
-	v4 wander_pos;
+	v4 target_pos;
 	uint model_id = 0u;
 	Model models[2];
 	Rng rng;
@@ -504,6 +558,7 @@ struct Rock
 						v4 hit = vel * hit_s;
 						hit.y = 3.5f * hit_s;
 						dino.Push(hit);
+						dino.Hit(hit_s);
 						dino_hit = &dino;
 						vel = Mtx::RotateY(RngF(M_PI / 2.0f, M_PI * 3/4)(*rng)) * vel * 0.2f;
 						vel.y = RngF(1.0f, 3.0f)(*rng);
@@ -555,17 +610,35 @@ struct Player
 
 	void Update(float dt, std::vector<Dino>& dinos)
 	{
-		camera.Update(*input, dt);
-		if ((rock_cd -= dt) < 0.0f && input->keys_up[Key_Space])
+		if (push.Len2() > 0.0f)
 		{
-			rock_cd = 0.5f;
-			rock_id = (rock_id + 1) % rocks.size();
-			v4 throw_v = camera.GetForward() * 5.5f * std::clamp(input->keys_time[Key_Space] * 2.0f, 0.5f, 1.5f);
-			throw_v.y = std::clamp(input->keys_time[Key_Space] * 2.0f, 0.0f, 2.5f);
-			rocks[rock_id].Throw(camera.pos + camera.GetRight() * 0.25f, throw_v);
+			push.y -= 2.5f * dt;
+			camera.pos += push * dt;
+			if (camera.pos.y < camera.h)
+			{
+				camera.pos.y = camera.h;
+				push = v4::Zero();
+			}
+		}
+		else
+		{
+			camera.Update(*input, dt);
+			if ((rock_cd -= dt) < 0.0f && input->keys_up[Key_Space])
+			{
+				rock_cd = 0.5f;
+				rock_id = (rock_id + 1) % rocks.size();
+				v4 throw_v = camera.GetForward() * 5.5f * std::clamp(input->keys_time[Key_Space] * 2.0f, 0.5f, 1.5f);
+				throw_v.y = std::clamp(input->keys_time[Key_Space] * 2.0f, 0.0f, 2.5f);
+				rocks[rock_id].Throw(camera.pos + camera.GetRight() * 0.25f, throw_v);
+			}
 		}
 		for (auto& rock : rocks)
 			rock.Update(dt, dinos);
+	}
+
+	void Push(v4 push_v)
+	{
+		push = push_v;
 	}
 	
 	void CopyTo(std::vector<Quad>& in_quads) const
@@ -580,7 +653,50 @@ struct Player
 	std::vector<Rock> rocks;
 	int rock_id = 0;
 	float rock_cd = 0.0f;
+	v4 push = v4::Zero();
 };
+
+void Dino::UpdateChase(float dt, Player& player)
+{
+	if (player.camera.pos.y != player.camera.h)
+		return;
+
+	target_pos = player.camera.GetPos2d();
+	if (target_pos.Dist2(pos) < 2.0f)
+	{
+		player.Push((target_pos - pos).Normalized() * 2.0f + v4{0.0f, 2.0f, 0.0f, 0.0f});
+	}
+}
+
+void Dino::UpdateFlee(float dt, Player& player)
+{
+	if ((flee_time -= dt) < 0.0f)
+	{
+		state = State::Wander;
+		aggression = 0.0f;
+		return;
+	}
+
+	v4 player_pos = player.camera.GetPos2d();
+	v4 way_out = pos - player_pos;
+	way_out = way_out * 15.0f;
+	target_pos = player_pos + way_out;
+	if (pos.Dist2(player_pos) > 225.0f)
+	{
+		state = State::Wander;
+		aggression = 0.0f;
+	}
+}
+
+void Dino::UpdateWander(float dt, Player& player)
+{
+	if ((wander_time -= dt) < 0.0f)
+	{
+		wander_time = RngF(1.5f, 8.0f)(rng);
+		RngF wr(-5.0f, 5.0f);
+		target_pos = pos + v4{wr(rng), 0.0f, wr(rng)};
+	}
+}
 
 void GenerateStaticScene(std::vector<Quad>& quads, const Map& map, const Model& cactus)
 {
@@ -593,17 +709,8 @@ void GenerateStaticScene(std::vector<Quad>& quads, const Map& map, const Model& 
 	for (int j = -ms2; j < ms2; ++j)
 	{
 		if (map.At({i, j}) == Map::Cell::Cactus)
-			Model(cactus).Transform(Mtx::Translate({(float)i, 0.0f, (float)j}) * Mtx::RotateY(RngF(0.0f, M_PI * 2)(rng)) * Mtx::Scale(0.5f)).Colorize({0.2f, 0.5f, 0.0f}, {0.6f, 0.9f, 0.1f}, rng).Light({0.5f, -0.5f, 0.5f}).CopyTo(quads);
+			Model(cactus).Transform(Mtx::Translate({i + 0.5f, 0.0f, j + 0.5f}) * Mtx::RotateY(RngF(0.0f, M_PI * 2)(rng)) * Mtx::Scale(0.5f)).Colorize({0.2f, 0.5f, 0.0f}, {0.6f, 0.9f, 0.1f}, rng).Light({0.5f, -0.5f, 0.5f}).CopyTo(quads);
 	}
-	// Floor
-	quads.emplace_back(Quad
-	{
-		v4{-ms2f, 0.0f, ms2f},
-		v4{-ms2f, 0.0f, -ms2f},
-		v4{ms2f, 0.0f, -ms2f},
-		v4{ms2f, 0.0f, ms2f},
-		v4{0.5f, 0.5f, 0.5f}
-	});
 }
 
 enum class TransformResult
@@ -937,10 +1044,21 @@ int main()
 		quads.insert(quads.end(), static_scene.begin(), static_scene.end());
 		for (Dino& dino : dinos)
 		{
-			dino.Update(dt);
+			dino.Update(dt, player);
 			dino.CopyTo(quads);
 		}
 		player.CopyTo(quads);
+		// Floor
+		float ms2f = map.GetSize() / 2.0f;
+		quads.emplace_back(Mtx::Translate(player.camera.GetPos2d()) * Quad
+		{
+			v4{-ms2f, 0.0f, ms2f},
+			v4{-ms2f, 0.0f, -ms2f},
+			v4{ms2f, 0.0f, -ms2f},
+			v4{ms2f, 0.0f, ms2f},
+			v4{0.45f, 0.3f, 0.10f} * 1.5f
+		});
+
 		input.EndFrame();
 	});
 

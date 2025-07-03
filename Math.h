@@ -11,6 +11,8 @@ struct i2
 	int y;
 
 	constexpr i2() = default;
+	constexpr i2(int val)
+		: x(val), y(val) {}
 	constexpr i2(int in_x, int in_y)
 		: x(in_x), y(in_y) {}
 
